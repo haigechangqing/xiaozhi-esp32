@@ -91,8 +91,13 @@ esp_err_t Ota::CheckVersion() {
     auto http = SetupHttp();
 
     std::string data = board.GetSystemInfoJson();
-    std::string method = data.length() > 0 ? "POST" : "GET";
-    http->SetContent(std::move(data));
+    // 对 GitHub 静态文件 URL 使用 GET 请求（POST 会返回 403）
+    bool is_static_url = (url.find("raw.githubusercontent.com") != std::string::npos ||
+                          url.find("github.com") != std::string::npos);
+    std::string method = (is_static_url || data.length() == 0) ? "GET" : "POST";
+    if (method == "POST") {
+        http->SetContent(std::move(data));
+    }
 
     if (!http->Open(method, url)) {
         int last_error = http->GetLastError();

@@ -112,3 +112,21 @@ jobs:
             build/xiaozhi.bin
           prerelease: true
           make_latest: true
+
+      - name: Update ota.json
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        shell: bash
+        run: |
+          cat > ota.json << JSONEOF
+          {
+            "firmware": {
+              "version": "${{ steps.version.outputs.version }}",
+              "url": "https://gh-proxy.com/https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"
+            }
+          }
+          JSONEOF
+          git config user.email "ci@github-actions.local"
+          git config user.name "GitHub Actions"
+          git add ota.json
+          git commit -m "chore: update ota.json to v${{ steps.version.outputs.version }}" || true
+          git push origin main
