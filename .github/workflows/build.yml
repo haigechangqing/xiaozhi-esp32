@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - ci/* # for ci test
+    paths-ignore:
+      - 'main/boards/xingzhi-cube-0.96oled-ml307/**'
+      - '.github/workflows/build-xingzhi-cube.yml'
   pull_request:
     branches:
       - main
