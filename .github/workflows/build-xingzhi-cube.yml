@@ -1,0 +1,84 @@
+name: Build XingZhi Cube 0.96 OLED (ML307)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: 'Upload firmware to GitHub Release'
+        type: boolean
+        default: false
+        required: false
+  push:
+    branches:
+      - main
+    paths:
+      - 'main/boards/xingzhi-cube-0.96oled-ml307/**'
+      - 'main/boards/common/**'
+      - 'main/audio/**'
+      - 'main/display/**'
+      - 'main/led/**'
+      - 'main/protocols/**'
+      - 'main/mcp_server.*'
+      - 'main/application.*'
+      - 'main/ota.*'
+      - 'main/settings.*'
+      - 'main/assets.*'
+      - 'main/device_state*'
+      - 'main/system_info.*'
+      - 'main/main.cc'
+      - 'main/CMakeLists.txt'
+      - 'main/idf_component.yml'
+      - 'main/Kconfig.projbuild'
+      - 'CMakeLists.txt'
+      - 'sdkconfig.defaults'
+      - 'sdkconfig.defaults.esp32s3'
+      - 'partitions/**'
+      - '.github/workflows/build-xingzhi-cube.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build xingzhi-cube-0.96oled-ml307
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v6.0.1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          source $IDF_PATH/export.sh
+          python scripts/release.py xingzhi-cube-0.96oled-ml307 --name xingzhi-cube-0.96oled-ml307
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          VER=$(grep 'set(PROJECT_VER' CMakeLists.txt | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xingzhi-cube-0.96oled-ml307_v${{ steps.version.outputs.version }}
+          path: |
+            build/merged-binary.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/xiaozhi-esp32.bin
+          if-no-files-found: error
+
+      - name: Create/Update Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}-xingzhi-cube
+          name: 星智 Cube 0.96 OLED v${{ steps.version.outputs.version }}
+          files: build/merged-binary.bin
+          prerelease: true
+          generate_release_notes: true
