@@ -67,6 +67,27 @@ private:
         return dynamic_cast<AtModem*>(network);
     }
 
+    // 带重试的 AT 命令发送
+    // 在音频传输期间 UART 可能被占用，需要重试
+    bool SendAtCommand(const std::string& cmd, int timeout_ms = 3000, int max_retries = 5) {
+        auto* modem = GetModem();
+        if (!modem) return false;
+
+        auto at_uart = modem->GetAtUart();
+
+        for (int retry = 0; retry < max_retries; retry++) {
+            if (at_uart->SendCommand(cmd, timeout_ms)) {
+                return true;
+            }
+            if (retry < max_retries - 1) {
+                ESP_LOGW(TAG, "Retry %d/%d for: %s", retry + 1, max_retries, cmd.c_str());
+                vTaskDelay(pdMS_TO_TICKS(1000)); // 等待 UART 空闲
+            }
+        }
+        ESP_LOGE(TAG, "Failed to send after %d retries: %s", max_retries, cmd.c_str());
+        return false;
+    }
+
     // ==================== GNSS Power Management ====================
 
     bool PowerOnGnss() {
@@ -78,9 +99,7 @@ private:
             return false;
         }
 
-        auto at_uart = modem->GetAtUart();
-        if (!at_uart->SendCommand("AT+CGNSSPWR=1", 3000)) {
-            ESP_LOGE(TAG, "Failed to send AT+CGNSSPWR=1");
+        if (!SendAtCommand("AT+CGNSSPWR=1")) {
             return false;
         }
 
@@ -130,7 +149,7 @@ private:
         for (int i = 0; i < max_attempts; i++) {
             vTaskDelay(pdMS_TO_TICKS(2000));
 
-            if (!at_uart->SendCommand("AT+CGNSSINFO", 3000)) {
+            if (!SendAtCommand("AT+CGNSSINFO", 3000, 3)) {
                 ESP_LOGW(TAG, "Failed to query GNSS info, attempt %d/%d", i + 1, max_attempts);
                 continue;
             }
@@ -247,19 +266,14 @@ private:
     bool ConfigureLbs() {
         if (lbs_configured_) return true;
 
-        auto* modem = GetModem();
-        if (!modem) return false;
-
-        auto at_uart = modem->GetAtUart();
-
         // 使用 OneOS 定位服务（method=40），模组内置鉴权参数，无需 apikey
-        if (!at_uart->SendCommand("AT+MLBSCFG=\"method\",40", 3000)) {
+        if (!SendAtCommand("AT+MLBSCFG=\"method\",40")) {
             ESP_LOGE(TAG, "Failed to set LBS method to OneOS");
             return false;
         }
 
         // 启用邻区信息参与定位，提升精度
-        at_uart->SendCommand("AT+MLBSCFG=\"nearbtsen\",1", 3000);
+        SendAtCommand("AT+MLBSCFG=\"nearbtsen\",1");
 
         lbs_configured_ = true;
         ESP_LOGI(TAG, "LBS configured (OneOS, no apikey needed)");
@@ -281,8 +295,7 @@ private:
 
         // 发送 AT+MLBSLOC 请求定位
         // 模组会先返回 OK，然后异步返回 +MLBSLOC: <状态码>,<经度>,<纬度>,<精度>
-        if (!at_uart->SendCommand("AT+MLBSLOC", 3000)) {
-            ESP_LOGE(TAG, "Failed to send AT+MLBSLOC");
+        if (!SendAtCommand("AT+MLBSLOC")) {
             return std::string("{\"error\":\"Failed to request LBS location.\"}");
         }
 
@@ -296,7 +309,7 @@ private:
             vTaskDelay(pdMS_TO_TICKS(1000));
 
             // 发送 AT 命令触发串口读取，检查缓冲区中是否有 +MLBSLOC:
-            at_uart->SendCommand("AT", 2000);
+            SendAtCommand("AT", 2000, 3);
             response = at_uart->GetResponse();
             ESP_LOGI(TAG, "LBS wait %d/%d: %s", i + 1, max_wait, response.c_str());
 
