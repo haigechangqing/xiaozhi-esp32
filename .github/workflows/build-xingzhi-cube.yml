@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       upload_to_release:
-        description: 'Upload firmware to GitHub Release'
+        description: 'Upload firmware to GitHub Release (includes OTA file)'
         type: boolean
-        default: false
+        default: true
         required: false
   push:
     branches:
@@ -79,6 +79,8 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.version }}-xingzhi-cube
           name: 星智 Cube 0.96 OLED v${{ steps.version.outputs.version }}
-          files: build/merged-binary.bin
+          files: |
+            build/merged-binary.bin
+            build/xiaozhi-esp32.bin
           prerelease: true
           generate_release_notes: true
