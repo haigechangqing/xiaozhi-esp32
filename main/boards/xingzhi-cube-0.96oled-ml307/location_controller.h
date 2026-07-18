@@ -59,6 +59,7 @@ public:
 
 private:
     bool gnss_powered_on_ = false;
+    bool lbs_configured_ = false;
 
     // Get the AtModem pointer from the current board
     AtModem* GetModem() {
@@ -242,6 +243,29 @@ private:
 
     // ==================== LBS ====================
 
+    // 配置 LBS 定位服务（OneOS，模组内置鉴权，无需 apikey）
+    bool ConfigureLbs() {
+        if (lbs_configured_) return true;
+
+        auto* modem = GetModem();
+        if (!modem) return false;
+
+        auto at_uart = modem->GetAtUart();
+
+        // 使用 OneOS 定位服务（method=40），模组内置鉴权参数，无需 apikey
+        if (!at_uart->SendCommand("AT+MLBSCFG=\"method\",40", 3000)) {
+            ESP_LOGE(TAG, "Failed to set LBS method to OneOS");
+            return false;
+        }
+
+        // 启用邻区信息参与定位，提升精度
+        at_uart->SendCommand("AT+MLBSCFG=\"nearbtsen\",1", 3000);
+
+        lbs_configured_ = true;
+        ESP_LOGI(TAG, "LBS configured (OneOS, no apikey needed)");
+        return true;
+    }
+
     ReturnValue HandleGetLbs() {
         auto* modem = GetModem();
         if (!modem) {
@@ -250,37 +274,97 @@ private:
 
         auto at_uart = modem->GetAtUart();
 
-        if (!at_uart->SendCommand("AT+MLBSINFO", 10000)) {
-            ESP_LOGE(TAG, "Failed to send AT+MLBSINFO");
-            return std::string("{\"error\":\"Failed to query LBS location. Check SIM card and network.\"}");
+        // 确保 LBS 服务已配置
+        if (!ConfigureLbs()) {
+            return std::string("{\"error\":\"Failed to configure LBS service.\"}");
         }
 
-        std::string response = at_uart->GetResponse();
-        ESP_LOGI(TAG, "LBS raw response: %s", response.c_str());
+        // 发送 AT+MLBSLOC 请求定位
+        // 模组会先返回 OK，然后异步返回 +MLBSLOC: <状态码>,<经度>,<纬度>,<精度>
+        if (!at_uart->SendCommand("AT+MLBSLOC", 3000)) {
+            ESP_LOGE(TAG, "Failed to send AT+MLBSLOC");
+            return std::string("{\"error\":\"Failed to request LBS location.\"}");
+        }
 
+        // 等待异步响应 +MLBSLOC:
+        // AT+MLBSLOC 先返回 OK，+MLBSLOC: 结果在之后异步返回
+        std::string response;
+        bool got_location = false;
+        const int max_wait = 15; // 最多等待 15 秒
+
+        for (int i = 0; i < max_wait; i++) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+
+            // 发送 AT 命令触发串口读取，检查缓冲区中是否有 +MLBSLOC:
+            at_uart->SendCommand("AT", 2000);
+            response = at_uart->GetResponse();
+            ESP_LOGI(TAG, "LBS wait %d/%d: %s", i + 1, max_wait, response.c_str());
+
+            if (response.find("+MLBSLOC:") != std::string::npos) {
+                got_location = true;
+                break;
+            }
+        }
+
+        if (!got_location) {
+            return std::string("{\"error\":\"LBS location timeout. Check network and SIM card.\"}");
+        }
+
+        // 解析 +MLBSLOC: <状态码>,<经度>,<纬度>[,<精度>]
+        int status_code = 0;
         std::string longitude, latitude, accuracy;
-        if (!ParseLbsResponse(response, longitude, latitude, accuracy)) {
+        if (!ParseLbsResponse(response, status_code, longitude, latitude, accuracy)) {
             return std::string("{\"error\":\"Failed to parse LBS response: " + response + "\"}");
+        }
+
+        // 状态码 100 = 定位成功
+        if (status_code != 100) {
+            ESP_LOGE(TAG, "LBS location failed, status code: %d", status_code);
+            return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + ".\"");
         }
 
         return BuildLbsJson(latitude, longitude, accuracy);
     }
 
+    // 解析 +MLBSLOC: 响应
+    // 格式: +MLBSLOC: <状态码>,<经度>,<纬度>[,<精度>]
+    // 状态码: 100=成功, 126=失败需重启, 其他=错误
     bool ParseLbsResponse(const std::string& response,
+                          int& status_code,
                           std::string& longitude, std::string& latitude, std::string& accuracy) {
-        size_t pos = response.find("+MLBSINFO:");
+        size_t pos = response.find("+MLBSLOC:");
         if (pos == std::string::npos) return false;
 
-        std::string data = response.substr(pos + 10);
+        std::string data = response.substr(pos + 9);
         while (!data.empty() && data[0] == ' ') data = data.substr(1);
+
+        // 截取到行尾（+MLBSLOC: 后面同一行）
+        size_t newline = data.find('\n');
+        if (newline != std::string::npos) {
+            data = data.substr(0, newline);
+        }
+        // 去掉尾部 \r
+        if (!data.empty() && data.back() == '\r') {
+            data.pop_back();
+        }
 
         auto parts = SplitByComma(data);
         if (parts.size() < 3) return false;
 
-        // Format: longitude,latitude,accuracy
-        longitude = parts[0];
-        latitude = parts[1];
-        accuracy = parts[2];
+        try {
+            status_code = std::stoi(parts[0]);
+        } catch (...) {
+            return false;
+        }
+
+        // parts[1] = 经度, parts[2] = 纬度, parts[3] = 精度(可选)
+        longitude = parts[1];
+        latitude = parts[2];
+        if (parts.size() >= 4) {
+            accuracy = parts[3];
+        } else {
+            accuracy = "500"; // 默认精度
+        }
         return true;
     }
 
