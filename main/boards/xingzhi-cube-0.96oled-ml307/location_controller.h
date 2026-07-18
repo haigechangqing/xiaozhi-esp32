@@ -6,6 +6,7 @@
 #include <at_modem.h>
 #include <at_uart.h>
 #include <string>
+#include <variant>
 #include <vector>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -324,5 +325,7 @@ private:
         return parts;
     }
 };
+
+#undef TAG
 
 #endif // LOCATION_CONTROLLER_H
