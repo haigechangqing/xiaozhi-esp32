@@ -2,7 +2,7 @@ menu "Xiaozhi Assistant"
 
 config OTA_URL
     string "Default OTA URL"
-    default "https://raw.githubusercontent.com/haigechangqing/xiaozhi-esp32/main/ota.json"
+    default "https://api.tenclass.net/xiaozhi/ota/"
     help
         The application will access this URL to check for new firmwares and server address.
 
