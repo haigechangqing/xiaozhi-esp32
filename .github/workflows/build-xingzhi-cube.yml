@@ -73,23 +73,29 @@ jobs:
             build/xiaozhi.bin
           if-no-files-found: error
 
+      - name: Generate release notes
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        shell: bash
+        run: |
+          cat > release_body.md << 'BODYEOF'
+          ## 文件说明
+          | 文件 | 用途 |
+          |---|---|
+          | `merged-binary.bin` | USB 刷入（完整固件，地址 0x0） |
+          | `xiaozhi.bin` | OTA 升级（仅 app 固件） |
+
+          ## OTA 升级（国内可用 ghproxy 镜像）
+          对设备说：**"帮我升级固件，地址是 https://ghproxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
+          BODYEOF
+
       - name: Create/Update Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}-xingzhi-cube
           name: 星智 Cube 0.96 OLED v${{ steps.version.outputs.version }}
-          body: |
-            ## 文件说明
-            | 文件 | 用途 |
-            |---|---|
-            | `merged-binary.bin` | USB 刷入（完整固件，地址 0x0） |
-            | `xiaozhi.bin` | OTA 升级（仅 app 固件） |
-
-            ## OTA 升级（国内可用）
-            对设备说：**"帮我升级固件，地址是 https://ghproxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
+          body_path: release_body.md
           files: |
             build/merged-binary.bin
             build/xiaozhi.bin
           prerelease: true
-          generate_release_notes: true
