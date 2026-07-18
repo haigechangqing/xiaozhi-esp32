@@ -8,6 +8,7 @@
 #include "power_save_timer.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
+#include "location_controller.h"
 #include "../xingzhi-cube-1.54tft-wifi/power_manager.h"
 
 #include <driver/rtc_io.h>
@@ -184,6 +185,11 @@ private:
         });
     }
 
+    // 注册定位功能 MCP 工具
+    void InitializeTools() {
+        static LocationController location_controller;
+    }
+
 public:
     XINGZHI_CUBE_0_96OLED_ML307() : DualNetworkBoard(ML307_TX_PIN, ML307_RX_PIN),
         boot_button_(BOOT_BUTTON_GPIO),
@@ -194,6 +200,7 @@ public:
         InitializeDisplayI2c();
         InitializeSsd1306Display();
         InitializeButtons();
+        InitializeTools();
     }
 
     virtual Led* GetLed() override {
