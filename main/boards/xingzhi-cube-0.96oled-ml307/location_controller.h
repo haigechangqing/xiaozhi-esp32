@@ -11,6 +11,7 @@
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 #define TAG "LocationController"
 
@@ -69,7 +70,7 @@ private:
 
     // 带重试的 AT 命令发送
     // 在音频传输期间 UART 可能被占用，需要重试
-    bool SendAtCommand(const std::string& cmd, int timeout_ms = 3000, int max_retries = 5) {
+    bool SendAtCommand(const std::string& cmd, int timeout_ms = 3000, int max_retries = 5, int delay_ms = 1000) {
         auto* modem = GetModem();
         if (!modem) return false;
 
@@ -81,7 +82,7 @@ private:
             }
             if (retry < max_retries - 1) {
                 ESP_LOGW(TAG, "Retry %d/%d for: %s", retry + 1, max_retries, cmd.c_str());
-                vTaskDelay(pdMS_TO_TICKS(1000)); // 等待 UART 空闲
+                vTaskDelay(pdMS_TO_TICKS(delay_ms)); // 等待 UART 空闲
             }
         }
         ESP_LOGE(TAG, "Failed to send after %d retries: %s", max_retries, cmd.c_str());
@@ -99,7 +100,7 @@ private:
             return false;
         }
 
-        if (!SendAtCommand("AT+CGNSSPWR=1")) {
+        if (!SendAtCommand("AT+CGNSSPWR=1", 3000, 10, 3000)) {
             return false;
         }
 
@@ -293,92 +294,75 @@ private:
             return std::string("{\"error\":\"Failed to configure LBS service.\"}");
         }
 
+        // +MLBSLOC 是异步 URC（Unsolicited Result Code），必须用回调接收
+        // SemaphoreHandle_t 用于等待回调
+        SemaphoreHandle_t semaphore = xSemaphoreCreateBinary();
+        if (!semaphore) {
+            return std::string("{\"error\":\"Failed to create semaphore.\"}");
+        }
+
+        // 存储回调结果
+        int status_code = 0;
+        std::string longitude, latitude, accuracy;
+
+        // 注册 URC 回调：AtUart 在收到 +MLBSLOC: 时会调用此回调
+        auto callback_it = at_uart->RegisterUrcCallback(
+            [&](const std::string& command, const std::vector<AtArgumentValue>& arguments) {
+                if (command == "+MLBSLOC" && arguments.size() >= 3) {
+                    status_code = arguments[0].int_value;
+                    if (arguments[1].type == AtArgumentValue::Type::String) {
+                        longitude = arguments[1].string_value;
+                    } else {
+                        longitude = std::to_string(arguments[1].double_value);
+                    }
+                    if (arguments[2].type == AtArgumentValue::Type::String) {
+                        latitude = arguments[2].string_value;
+                    } else {
+                        latitude = std::to_string(arguments[2].double_value);
+                    }
+                    if (arguments.size() >= 4) {
+                        if (arguments[3].type == AtArgumentValue::Type::Int) {
+                            accuracy = std::to_string(arguments[3].int_value);
+                        } else if (arguments[3].type == AtArgumentValue::Type::String) {
+                            accuracy = arguments[3].string_value;
+                        } else {
+                            accuracy = std::to_string(arguments[3].double_value);
+                        }
+                    } else {
+                        accuracy = "500";
+                    }
+                    xSemaphoreGive(semaphore);
+                }
+            });
+
         // 发送 AT+MLBSLOC 请求定位
-        // 模组会先返回 OK，然后异步返回 +MLBSLOC: <状态码>,<经度>,<纬度>,<精度>
         if (!SendAtCommand("AT+MLBSLOC")) {
-            return std::string("{\"error\":\"Failed to request LBS location.\"}");
+            at_uart->UnregisterUrcCallback(callback_it);
+            vSemaphoreDelete(semaphore);
+            return std::string("{\"error\":\"Failed to send LBS location request.\"}");
         }
 
-        // 等待异步响应 +MLBSLOC:
-        // AT+MLBSLOC 先返回 OK，+MLBSLOC: 结果在之后异步返回
-        std::string response;
-        bool got_location = false;
-        const int max_wait = 15; // 最多等待 15 秒
+        ESP_LOGI(TAG, "LBS request sent, waiting for async response (max 30s)...");
 
-        for (int i = 0; i < max_wait; i++) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-
-            // 发送 AT 命令触发串口读取，检查缓冲区中是否有 +MLBSLOC:
-            SendAtCommand("AT", 2000, 3);
-            response = at_uart->GetResponse();
-            ESP_LOGI(TAG, "LBS wait %d/%d: %s", i + 1, max_wait, response.c_str());
-
-            if (response.find("+MLBSLOC:") != std::string::npos) {
-                got_location = true;
-                break;
-            }
-        }
-
-        if (!got_location) {
+        // 等待 URC 回调触发（最多 30 秒）
+        if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(30000)) != pdTRUE) {
+            at_uart->UnregisterUrcCallback(callback_it);
+            vSemaphoreDelete(semaphore);
             return std::string("{\"error\":\"LBS location timeout. Check network and SIM card.\"}");
         }
 
-        // 解析 +MLBSLOC: <状态码>,<经度>,<纬度>[,<精度>]
-        int status_code = 0;
-        std::string longitude, latitude, accuracy;
-        if (!ParseLbsResponse(response, status_code, longitude, latitude, accuracy)) {
-            return std::string("{\"error\":\"Failed to parse LBS response: " + response + "\"}");
-        }
+        at_uart->UnregisterUrcCallback(callback_it);
+        vSemaphoreDelete(semaphore);
+
+        ESP_LOGI(TAG, "LBS result: status=%d, lon=%s, lat=%s, acc=%s",
+                 status_code, longitude.c_str(), latitude.c_str(), accuracy.c_str());
 
         // 状态码 100 = 定位成功
         if (status_code != 100) {
-            ESP_LOGE(TAG, "LBS location failed, status code: %d", status_code);
-            return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + ".\"");
+            return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + ".\"}");
         }
 
         return BuildLbsJson(latitude, longitude, accuracy);
-    }
-
-    // 解析 +MLBSLOC: 响应
-    // 格式: +MLBSLOC: <状态码>,<经度>,<纬度>[,<精度>]
-    // 状态码: 100=成功, 126=失败需重启, 其他=错误
-    bool ParseLbsResponse(const std::string& response,
-                          int& status_code,
-                          std::string& longitude, std::string& latitude, std::string& accuracy) {
-        size_t pos = response.find("+MLBSLOC:");
-        if (pos == std::string::npos) return false;
-
-        std::string data = response.substr(pos + 9);
-        while (!data.empty() && data[0] == ' ') data = data.substr(1);
-
-        // 截取到行尾（+MLBSLOC: 后面同一行）
-        size_t newline = data.find('\n');
-        if (newline != std::string::npos) {
-            data = data.substr(0, newline);
-        }
-        // 去掉尾部 \r
-        if (!data.empty() && data.back() == '\r') {
-            data.pop_back();
-        }
-
-        auto parts = SplitByComma(data);
-        if (parts.size() < 3) return false;
-
-        try {
-            status_code = std::stoi(parts[0]);
-        } catch (...) {
-            return false;
-        }
-
-        // parts[1] = 经度, parts[2] = 纬度, parts[3] = 精度(可选)
-        longitude = parts[1];
-        latitude = parts[2];
-        if (parts.size() >= 4) {
-            accuracy = parts[3];
-        } else {
-            accuracy = "500"; // 默认精度
-        }
-        return true;
     }
 
     std::string BuildLbsJson(const std::string& lat, const std::string& lon, const std::string& acc) {
