@@ -88,6 +88,18 @@ jobs:
           对设备说：**"帮我升级固件，地址是 https://ghproxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
           BODYEOF
 
+      - name: Delete old tag and release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.version.outputs.version }}-xingzhi-cube"
+          # Delete existing release
+          gh release delete "$TAG" --yes --repo ${{ github.repository }} 2>/dev/null || true
+          # Delete remote tag
+          git push origin --delete "$TAG" 2>/dev/null || true
+
       - name: Create/Update Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
         uses: softprops/action-gh-release@v2
@@ -99,3 +111,4 @@ jobs:
             build/merged-binary.bin
             build/xiaozhi.bin
           prerelease: true
+          make_latest: true
