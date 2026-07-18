@@ -84,8 +84,8 @@ jobs:
           | `merged-binary.bin` | USB 刷入（完整固件，地址 0x0） |
           | `xiaozhi.bin` | OTA 升级（仅 app 固件） |
 
-          ## OTA 升级（国内可用 ghproxy 镜像）
-          对设备说：**"帮我升级固件，地址是 https://ghproxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
+          ## OTA 升级（国内可用 gh-proxy 镜像）
+          对设备说：**"帮我升级固件，地址是 https://gh-proxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
           BODYEOF
 
       - name: Delete old tag and release
