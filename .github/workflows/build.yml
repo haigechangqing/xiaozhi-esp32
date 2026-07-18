@@ -8,6 +8,25 @@ on:
     paths-ignore:
       - 'main/boards/xingzhi-cube-0.96oled-ml307/**'
       - '.github/workflows/build-xingzhi-cube.yml'
+      - 'main/ota.*'
+      - 'main/Kconfig.projbuild'
+      - 'ota.json'
+      - 'main/boards/common/**'
+      - 'main/audio/**'
+      - 'main/display/**'
+      - 'main/led/**'
+      - 'main/protocols/**'
+      - 'main/mcp_server.*'
+      - 'main/application.*'
+      - 'main/settings.*'
+      - 'main/assets.*'
+      - 'main/device_state*'
+      - 'main/system_info.*'
+      - 'main/main.cc'
+      - 'main/idf_component.yml'
+      - 'sdkconfig.defaults'
+      - 'sdkconfig.defaults.esp32s3'
+      - 'partitions/**'
   pull_request:
     branches:
       - main
