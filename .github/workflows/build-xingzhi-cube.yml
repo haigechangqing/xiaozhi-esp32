@@ -70,7 +70,7 @@ jobs:
             build/merged-binary.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
-            build/xiaozhi-esp32.bin
+            build/xiaozhi.bin
           if-no-files-found: error
 
       - name: Create/Update Release
@@ -81,6 +81,6 @@ jobs:
           name: 星智 Cube 0.96 OLED v${{ steps.version.outputs.version }}
           files: |
             build/merged-binary.bin
-            build/xiaozhi-esp32.bin
+            build/xiaozhi.bin
           prerelease: true
           generate_release_notes: true
