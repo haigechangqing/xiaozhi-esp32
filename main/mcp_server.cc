@@ -149,12 +149,16 @@ void McpServer::AddUserOnlyTools() {
         });
 
     // Firmware upgrade
-    AddUserOnlyTool("self.upgrade_firmware", "Upgrade firmware from a specific URL. This will download and install the firmware, then reboot the device.",
+    AddUserOnlyTool("self.upgrade_firmware", "Upgrade firmware from the latest release. This will download and install the firmware, then reboot the device. If no URL is specified, use the default release URL.",
         PropertyList({
-            Property("url", kPropertyTypeString, "The URL of the firmware binary file to download and install")
+            Property("url", kPropertyTypeString, "The URL of the firmware binary file to download and install. If not specified, the default release URL will be used.")
         }),
         [this](const PropertyList& properties) -> ReturnValue {
-            auto url = properties["url"].value<std::string>();
+            std::string default_url = "https://gh-proxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v2.4.0-xingzhi-cube/xiaozhi.bin";
+            std::string url = properties["url"].is_string() ? properties["url"].value<std::string>() : default_url;
+            if (url.empty()) {
+                url = default_url;
+            }
             ESP_LOGI(TAG, "User requested firmware upgrade from URL: %s", url.c_str());
             
             auto& app = Application::GetInstance();
