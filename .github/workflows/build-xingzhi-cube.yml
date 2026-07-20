@@ -124,13 +124,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -x
           mkdir -p update
           cp build/xiaozhi.bin update/xiaozhi.bin
           ls -lh update/xiaozhi.bin
 
           git config user.email "ci@github-actions.local"
           git config user.name "GitHub Actions"
+          git status
           git add update/xiaozhi.bin
+          git status
 
           # workflow_dispatch 时同时更新 ota.json 版本号
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.upload_to_release }}" = "true" ]; then
@@ -143,11 +146,13 @@ jobs:
           }
           JSONEOF
             git add ota.json
-            git commit -m "chore: update firmware to v${{ steps.version.outputs.version }} [skip ci]" || true
+            git diff --cached --stat || true
+            git commit -m "chore: update firmware to v${{ steps.version.outputs.version }} [skip ci]" || echo "Commit failed or nothing to commit"
           else
-            git commit -m "chore: update OTA firmware binary [skip ci]" || true
+            git diff --cached --stat || true
+            git commit -m "chore: update OTA firmware binary [skip ci]" || echo "Commit failed or nothing to commit"
           fi
 
           # Use GITHUB_TOKEN for push authentication
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git push origin main || true
+          git push origin main || echo "Push failed"
