@@ -34,6 +34,7 @@ on:
       - 'sdkconfig.defaults.esp32s3'
       - 'partitions/**'
       - '.github/workflows/build-xingzhi-cube.yml'
+      - 'ota.json'
 
 permissions:
   contents: write
