@@ -6,6 +6,7 @@ on:
       - main
       - ci/* # for ci test
     paths-ignore:
+      - 'CMakeLists.txt'
       - 'main/boards/xingzhi-cube-0.96oled-ml307/**'
       - '.github/workflows/build-xingzhi-cube.yml'
       - 'main/ota.*'
