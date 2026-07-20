@@ -114,6 +114,13 @@ jobs:
           prerelease: true
           make_latest: true
 
+      - name: Copy OTA firmware to update directory
+        shell: bash
+        run: |
+          mkdir -p update
+          cp build/xiaozhi.bin update/xiaozhi.bin
+          ls -lh update/xiaozhi.bin
+
       - name: Update ota.json
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
         shell: bash
@@ -122,12 +129,12 @@ jobs:
           {
             "firmware": {
               "version": "${{ steps.version.outputs.version }}",
-              "url": "https://gh-proxy.com/https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"
+              "url": "https://raw.githubusercontent.com/${{ github.repository }}/main/update/xiaozhi.bin"
             }
           }
           JSONEOF
           git config user.email "ci@github-actions.local"
           git config user.name "GitHub Actions"
-          git add ota.json
-          git commit -m "chore: update ota.json to v${{ steps.version.outputs.version }}" || true
+          git add ota.json update/xiaozhi.bin
+          git commit -m "chore: update ota.json and firmware to v${{ steps.version.outputs.version }}" || true
           git push origin main

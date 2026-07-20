@@ -1,6 +1,6 @@
 {
   "firmware": {
-    "version": "2.4.2",
-    "url": "https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v2.4.2-xingzhi-cube/xiaozhi.bin"
+    "version": "2.4.3",
+    "url": "https://raw.githubusercontent.com/haigechangqing/xiaozhi-esp32/main/update/xiaozhi.bin"
   }
 }

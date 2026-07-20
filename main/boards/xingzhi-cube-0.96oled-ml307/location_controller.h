@@ -138,16 +138,42 @@ private:
             return true;
         }
 
-        ESP_LOGI(TAG, "Powering on GNSS (AT+CGNSSPWR=1)...");
-        if (!SendAtCommand("AT+CGNSSPWR=1", 5000, 5, 2000)) {
-            ESP_LOGE(TAG, "Failed to power on GNSS with AT+CGNSSPWR=1");
-            return false;
+        auto* modem = GetModem();
+        if (!modem) return false;
+        auto at_uart = modem->GetAtUart();
+
+        // 诊断：查询当前 GNSS 电源状态
+        ESP_LOGI(TAG, "GNSS diagnosis: querying current power state...");
+        if (SendAtCommand("AT+CGNSSPWR?", 3000, 2)) {
+            ESP_LOGI(TAG, "GNSS power state response: %s", at_uart->GetResponse().c_str());
         }
 
-        gnss_powered_on_ = true;
-        ESP_LOGI(TAG, "GNSS powered on, waiting for module to initialize (2s)...");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return true;
+        // 诊断：查询 GNSS 命令支持情况
+        ESP_LOGI(TAG, "GNSS diagnosis: querying command help...");
+        if (SendAtCommand("AT+CGNSSINFO=?", 3000, 2)) {
+            ESP_LOGI(TAG, "GNSS INFO help: %s", at_uart->GetResponse().c_str());
+        }
+
+        // 尝试标准命令 AT+CGNSSPWR=1
+        ESP_LOGI(TAG, "Powering on GNSS (AT+CGNSSPWR=1)...");
+        if (SendAtCommand("AT+CGNSSPWR=1", 5000, 5, 2000)) {
+            gnss_powered_on_ = true;
+            ESP_LOGI(TAG, "GNSS powered on, waiting for module to initialize (2s)...");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            return true;
+        }
+
+        // 备用命令：AT+CGNSSPWR=1,1（某些模块需要第二个参数）
+        ESP_LOGW(TAG, "Standard power on failed, trying AT+CGNSSPWR=1,1...");
+        if (SendAtCommand("AT+CGNSSPWR=1,1", 5000, 3, 2000)) {
+            gnss_powered_on_ = true;
+            ESP_LOGI(TAG, "GNSS powered on with AT+CGNSSPWR=1,1, waiting (2s)...");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            return true;
+        }
+
+        ESP_LOGE(TAG, "Failed to power on GNSS. Possible reasons: GNSS antenna not connected, module variant does not support GNSS, or different AT command required.");
+        return false;
     }
 
     bool PowerOffGnss() {
