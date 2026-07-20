@@ -51,6 +51,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Build firmware
         shell: bash
@@ -118,15 +121,17 @@ jobs:
 
       - name: Update OTA firmware in repository
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p update
           cp build/xiaozhi.bin update/xiaozhi.bin
           ls -lh update/xiaozhi.bin
-          
+
           git config user.email "ci@github-actions.local"
           git config user.name "GitHub Actions"
           git add update/xiaozhi.bin
-          
+
           # workflow_dispatch 时同时更新 ota.json 版本号
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.upload_to_release }}" = "true" ]; then
             cat > ota.json << JSONEOF
@@ -142,5 +147,7 @@ jobs:
           else
             git commit -m "chore: update OTA firmware binary [skip ci]" || true
           fi
-          
+
+          # Use GITHUB_TOKEN for push authentication
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin main || true
