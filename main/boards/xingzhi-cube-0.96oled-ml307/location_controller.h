@@ -22,13 +22,14 @@ public:
     LocationController() {
         auto& mcp_server = McpServer::GetInstance();
 
+        // ML307R-DL 模块不支持 GNSS 卫星定位
         mcp_server.AddTool("self.location.get_gnss",
-            "Get current location using GNSS (GPS/BeiDou/GLONASS) satellite positioning.\n"
-            "Requires GNSS antenna connected and open sky view. Cold start takes 30-60 seconds.\n"
-            "Returns JSON with type, latitude, longitude, altitude.",
+            "This device uses ML307R-DL module which does not support GNSS satellite positioning.\n"
+            "Please use self.location.get_lbs for cellular positioning.",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
-                return HandleGetGnss();
+                ESP_LOGI(TAG, "GNSS requested but ML307R-DL does not support GNSS");
+                return std::string("{\"error\":\"GNSS satellite positioning is not supported on this device (ML307R-DL module). Please use cellular LBS positioning instead.\"}");
             });
 
         mcp_server.AddTool("self.location.get_lbs",
@@ -42,7 +43,7 @@ public:
             });
 
         mcp_server.AddTool("self.location.get_current",
-            "Get current location using cellular LBS positioning by default.\n"
+            "Get current location using cellular LBS positioning.\n"
             "Fast and reliable. Does not require GNSS antenna.\n"
             "Returns JSON with type, latitude, longitude, and accuracy.",
             PropertyList(),
@@ -51,12 +52,9 @@ public:
             });
     }
 
-    ~LocationController() {
-        PowerOffGnss();
-    }
+    ~LocationController() {}
 
 private:
-    bool gnss_powered_on_ = false;
     bool lbs_configured_ = false;
 
     AtModem* GetModem() {
@@ -64,32 +62,17 @@ private:
         return dynamic_cast<AtModem*>(network);
     }
 
-    // ==================== 音频状态管理 ====================
-
     void PauseAudioOutput() {
         auto& app = Application::GetInstance();
-        auto state_before = app.GetDeviceState();
-        ESP_LOGI(TAG, "PauseAudioOutput: state before=%d", (int)state_before);
-
-        // 1. 发送中止指令到服务器，停止推送音频流
-        ESP_LOGI(TAG, "Aborting speaking...");
+        ESP_LOGI(TAG, "PauseAudioOutput: state=%d", (int)app.GetDeviceState());
         app.AbortSpeaking(kAbortReasonNone);
-
-        // 2. 等待服务器停止推送 + 本地缓冲排空 + UHCI 释放
-        // 从日志看 LBS 命令在 ~14s 后成功，这里用 10s 折中
         ESP_LOGI(TAG, "Waiting 10s for UHCI to become free...");
         vTaskDelay(pdMS_TO_TICKS(10000));
-
-        auto state_after = app.GetDeviceState();
-        ESP_LOGI(TAG, "PauseAudioOutput: state after wait=%d", (int)state_after);
-
-        // 3. 禁用 I2S 音频输出
         auto* audio_codec = Board::GetInstance().GetAudioCodec();
         if (audio_codec) {
             ESP_LOGI(TAG, "Disabling I2S audio output...");
             audio_codec->EnableOutput(false);
             vTaskDelay(pdMS_TO_TICKS(200));
-            ESP_LOGI(TAG, "I2S audio output disabled");
         }
     }
 
@@ -98,11 +81,8 @@ private:
         if (audio_codec) {
             ESP_LOGI(TAG, "Enabling I2S audio output...");
             audio_codec->EnableOutput(true);
-            ESP_LOGI(TAG, "I2S audio output enabled");
         }
     }
-
-    // ==================== AT 命令发送 ====================
 
     bool SendAtCommand(const std::string& cmd, int timeout_ms = 3000, int max_retries = 5, int delay_ms = 1000) {
         auto* modem = GetModem();
@@ -110,433 +90,182 @@ private:
             ESP_LOGE(TAG, "SendAtCommand: modem not available");
             return false;
         }
-
         auto at_uart = modem->GetAtUart();
         ESP_LOGI(TAG, "SendAtCommand: [%s] (timeout=%d, retries=%d)", cmd.c_str(), timeout_ms, max_retries);
-
         for (int retry = 0; retry < max_retries; retry++) {
             bool ok = at_uart->SendCommand(cmd, timeout_ms);
             ESP_LOGI(TAG, "  Attempt %d/%d: %s", retry + 1, max_retries, ok ? "OK" : "FAIL");
-
             if (ok) return true;
-
             if (retry < max_retries - 1) {
-                ESP_LOGW(TAG, "  Retry %d/%d for: %s (waiting %d ms)", retry + 1, max_retries, cmd.c_str(), delay_ms);
+                ESP_LOGW(TAG, "  Retry %d/%d for: %s", retry + 1, max_retries, cmd.c_str());
                 vTaskDelay(pdMS_TO_TICKS(delay_ms));
             }
         }
-        ESP_LOGE(TAG, "SendAtCommand FAILED after %d retries: %s", max_retries, cmd.c_str());
+        ESP_LOGE(TAG, "SendAtCommand FAILED: %s", cmd.c_str());
         return false;
     }
-
-    // ==================== GNSS Power Management ====================
-
-    void LogAtResponse(const char* command_name) {
-        auto* modem = GetModem();
-        if (!modem) return;
-        auto at_uart = modem->GetAtUart();
-        std::string response = at_uart->GetResponse();
-        if (response.empty()) {
-            ESP_LOGW(TAG, "GNSS %s: no response (module may not support this command)", command_name);
-        } else {
-            ESP_LOGI(TAG, "GNSS %s response: [%s]", command_name, response.c_str());
-        }
-    }
-
-    bool PowerOnGnss() {
-        if (gnss_powered_on_) {
-            ESP_LOGI(TAG, "GNSS already powered on");
-            return true;
-        }
-
-        auto* modem = GetModem();
-        if (!modem) return false;
-        auto at_uart = modem->GetAtUart();
-
-        // 诊断：测试基础 AT 通信
-        ESP_LOGI(TAG, "GNSS diagnosis: basic AT test...");
-        if (SendAtCommand("AT", 3000, 2)) {
-            ESP_LOGI(TAG, "GNSS diagnosis: AT command works");
-        } else {
-            ESP_LOGE(TAG, "GNSS diagnosis: AT command failed, modem not responding");
-            return false;
-        }
-
-        // 诊断：查询当前 GNSS 电源状态
-        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGNSSPWR?...");
-        if (SendAtCommand("AT+CGNSSPWR?", 3000, 2)) {
-            LogAtResponse("AT+CGNSSPWR?");
-        } else {
-            LogAtResponse("AT+CGNSSPWR?");
-        }
-
-        // 诊断：查询 GNSS 信息命令支持情况
-        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGNSSINFO=?...");
-        if (SendAtCommand("AT+CGNSSINFO=?", 3000, 2)) {
-            LogAtResponse("AT+CGNSSINFO=?");
-        } else {
-            LogAtResponse("AT+CGNSSINFO=?");
-        }
-
-        // 诊断：查询模块是否支持 GPS/GLONASS 相关命令
-        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGPS=?...");
-        if (SendAtCommand("AT+CGPS=?", 3000, 2)) {
-            LogAtResponse("AT+CGPS=?");
-        } else {
-            LogAtResponse("AT+CGPS=?");
-        }
-
-        // 尝试标准命令 AT+CGNSSPWR=1
-        ESP_LOGI(TAG, "Powering on GNSS (AT+CGNSSPWR=1)...");
-        if (SendAtCommand("AT+CGNSSPWR=1", 5000, 5, 2000)) {
-            LogAtResponse("AT+CGNSSPWR=1");
-            gnss_powered_on_ = true;
-            ESP_LOGI(TAG, "GNSS powered on, waiting for module to initialize (3s)...");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            return true;
-        }
-
-        // 备用命令：AT+CGNSSPWR=1,1（某些模块需要第二个参数）
-        ESP_LOGW(TAG, "Standard power on failed, trying AT+CGNSSPWR=1,1...");
-        if (SendAtCommand("AT+CGNSSPWR=1,1", 5000, 3, 2000)) {
-            LogAtResponse("AT+CGNSSPWR=1,1");
-            gnss_powered_on_ = true;
-            ESP_LOGI(TAG, "GNSS powered on with AT+CGNSSPWR=1,1, waiting (3s)...");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            return true;
-        }
-
-        // 备用命令：AT+CGPS=1（移远/合宙模块常用格式）
-        ESP_LOGW(TAG, "Trying legacy AT+CGPS=1...");
-        if (SendAtCommand("AT+CGPS=1", 5000, 3, 2000)) {
-            LogAtResponse("AT+CGPS=1");
-            gnss_powered_on_ = true;
-            ESP_LOGI(TAG, "GNSS powered on with AT+CGPS=1, waiting (3s)...");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            return true;
-        }
-
-        ESP_LOGE(TAG, "Failed to power on GNSS. Module reports support but command execution failed.");
-        ESP_LOGE(TAG, "Possible reasons: GNSS antenna not connected, GNSS shared RF with 4G (disable data first), wrong firmware variant, or module requires different power-on sequence.");
-        return false;
-    }
-
-    bool PowerOffGnss() {
-        if (!gnss_powered_on_) {
-            ESP_LOGI(TAG, "GNSS already off");
-            return true;
-        }
-
-        ESP_LOGI(TAG, "Powering off GNSS...");
-        auto* modem = GetModem();
-        if (modem) {
-            auto at_uart = modem->GetAtUart();
-            at_uart->SendCommand("AT+CGNSSPWR=0", 3000);
-        }
-        gnss_powered_on_ = false;
-        ESP_LOGI(TAG, "GNSS powered off");
-        return true;
-    }
-
-    // ==================== GNSS ====================
-
-    ReturnValue HandleGetGnss() {
-        ESP_LOGI(TAG, "=== HandleGetGnss START ===");
-
-        auto* modem = GetModem();
-        if (!modem) {
-            return std::string("{\"error\":\"Modem not available. Please switch to 4G network mode.\"}");
-        }
-
-        auto at_uart = modem->GetAtUart();
-
-        PauseAudioOutput();
-
-        if (!PowerOnGnss()) {
-            ResumeAudioOutput();
-            return std::string("{\"error\":\"Failed to power on GNSS module. Check SIM card and antenna.\"}");
-        }
-
-        ESP_LOGI(TAG, "Polling GNSS info (max 60s, every 2s)...");
-        std::string response;
-        bool got_fix = false;
-        const int max_attempts = 30;
-
-        for (int i = 0; i < max_attempts; i++) {
-            vTaskDelay(pdMS_TO_TICKS(2000));
-
-            if (!SendAtCommand("AT+CGNSSINFO", 3000, 3)) {
-                ESP_LOGW(TAG, "GNSS: query failed, attempt %d/%d", i + 1, max_attempts);
-                continue;
-            }
-
-            response = at_uart->GetResponse();
-            ESP_LOGI(TAG, "GNSS raw response [%d]: %s", i + 1, response.c_str());
-
-            int state = ParseGnssState(response);
-            ESP_LOGI(TAG, "GNSS state: %d", state);
-
-            if (state > 0) {
-                got_fix = true;
-                ESP_LOGI(TAG, "GNSS fix obtained after %d seconds", (i + 1) * 2);
-                break;
-            }
-        }
-
-        PowerOffGnss();
-        ResumeAudioOutput();
-
-        if (!got_fix) {
-            return std::string("{\"error\":\"GNSS fix timeout. Ensure antenna is connected and device has clear sky view.\"}");
-        }
-
-        std::string latitude, longitude, altitude;
-        if (!ParseGnssResponse(response, latitude, longitude, altitude)) {
-            return std::string("{\"error\":\"Failed to parse GNSS response.\"}");
-        }
-
-        std::string result = BuildGnssJson(latitude, longitude, altitude);
-        ESP_LOGI(TAG, "GNSS result: %s", result.c_str());
-        ESP_LOGI(TAG, "=== HandleGetGnss END ===");
-        return result;
-    }
-
-    int ParseGnssState(const std::string& response) {
-        size_t pos = response.find("+CGNSSINFO:");
-        if (pos == std::string::npos) return -1;
-
-        std::string data = response.substr(pos + 11);
-        while (!data.empty() && data[0] == ' ') data = data.substr(1);
-
-        size_t comma = data.find(',');
-        if (comma == std::string::npos) return -1;
-
-        try {
-            return std::stoi(data.substr(0, comma));
-        } catch (...) {
-            return -1;
-        }
-    }
-
-    bool ParseGnssResponse(const std::string& response,
-                           std::string& latitude, std::string& longitude, std::string& altitude) {
-        size_t pos = response.find("+CGNSSINFO:");
-        if (pos == std::string::npos) return false;
-
-        std::string data = response.substr(pos + 11);
-        while (!data.empty() && data[0] == ' ') data = data.substr(1);
-
-        auto parts = SplitByComma(data);
-        if (parts.size() < 5) return false;
-
-        try {
-            double lat_raw = std::stod(parts[1]);
-            int lat_deg = (int)(lat_raw / 100);
-            double lat_min = lat_raw - lat_deg * 100;
-            double lat_dec = lat_deg + lat_min / 60.0;
-            if (parts[2] == "S") lat_dec = -lat_dec;
-            latitude = std::to_string(lat_dec);
-
-            double lon_raw = std::stod(parts[3]);
-            int lon_deg = (int)(lon_raw / 100);
-            double lon_min = lon_raw - lon_deg * 100;
-            double lon_dec = lon_deg + lon_min / 60.0;
-            if (parts[4] == "W") lon_dec = -lon_dec;
-            longitude = std::to_string(lon_dec);
-
-            if (parts.size() >= 6 && !parts[5].empty()) {
-                altitude = parts[5];
-            }
-        } catch (...) {
-            return false;
-        }
-
-        return true;
-    }
-
-    std::string BuildGnssJson(const std::string& lat, const std::string& lon, const std::string& alt) {
-        std::string json = "{\"type\":\"gnss\",\"latitude\":";
-        json += lat + ",\"longitude\":" + lon;
-        if (!alt.empty()) json += ",\"altitude\":" + alt;
-        json += "}";
-        return json;
-    }
-
-    // ==================== LBS ====================
 
     bool ConfigureLbs() {
         if (lbs_configured_) {
             ESP_LOGI(TAG, "LBS already configured");
             return true;
         }
-
         ESP_LOGI(TAG, "Configuring LBS (OneOS, method=40)...");
         if (!SendAtCommand("AT+MLBSCFG=\"method\",40")) {
-            ESP_LOGE(TAG, "Failed to set LBS method to OneOS");
+            ESP_LOGE(TAG, "Failed to set LBS method");
             return false;
         }
-
         SendAtCommand("AT+MLBSCFG=\"nearbtsen\",1");
-
         lbs_configured_ = true;
-        ESP_LOGI(TAG, "LBS configured (OneOS, no apikey needed)");
+        ESP_LOGI(TAG, "LBS configured");
         return true;
     }
 
     ReturnValue HandleGetLbs() {
         ESP_LOGI(TAG, "=== HandleGetLbs START ===");
-
         auto* modem = GetModem();
         if (!modem) {
-            return std::string("{\"error\":\"Modem not available. Please switch to 4G network mode.\"}");
+            return std::string("{\"error\":\"Modem not available\"}");
         }
-
         auto at_uart = modem->GetAtUart();
 
         PauseAudioOutput();
 
         if (!ConfigureLbs()) {
             ResumeAudioOutput();
-            return std::string("{\"error\":\"Failed to configure LBS service.\"}");
+            return std::string("{\"error\":\"Failed to configure LBS\"}");
         }
 
-        // +MLBSLOC 响应是 URC 格式（+MLBSLOC: ...），会被 SendCommand 内部消费
-        // 必须用 URC 回调捕获，不能用 GetResponse()
-        SemaphoreHandle_t semaphore = xSemaphoreCreateBinary();
-        if (!semaphore) {
-            ResumeAudioOutput();
-            return std::string("{\"error\":\"Failed to create semaphore.\"}");
-        }
+        // 最多重试 3 次 LBS 定位
+        const int max_attempts = 3;
+        for (int attempt = 0; attempt < max_attempts; attempt++) {
+            ESP_LOGI(TAG, "LBS attempt %d/%d", attempt + 1, max_attempts);
 
-        int status_code = 0;
-        std::string longitude, latitude, accuracy;
+            SemaphoreHandle_t semaphore = xSemaphoreCreateBinary();
+            if (!semaphore) {
+                ResumeAudioOutput();
+                return std::string("{\"error\":\"Failed to create semaphore\"}");
+            }
 
-        // 注册 URC 回调（AtUart::ParseResponse 会去掉 + 前缀，所以匹配 "MLBSLOC"）
-        ESP_LOGI(TAG, "Registering URC callback for MLBSLOC...");
-        auto callback_it = at_uart->RegisterUrcCallback(
-            [&](const std::string& command, const std::vector<AtArgumentValue>& arguments) {
-                ESP_LOGI(TAG, "URC callback fired: command=%s, args=%d", command.c_str(), (int)arguments.size());
-                if (command == "MLBSLOC" && arguments.size() >= 3) {
+            int status_code = 0;
+            std::string longitude, latitude, accuracy;
+            bool got_location = false;
+            bool got_status = false;
+
+            ESP_LOGI(TAG, "Registering URC callback for MLBSLOC...");
+            auto callback_it = at_uart->RegisterUrcCallback(
+                [&](const std::string& command, const std::vector<AtArgumentValue>& arguments) {
+                    ESP_LOGI(TAG, "URC fired: command=%s, args=%d", command.c_str(), (int)arguments.size());
+                    if (command != "MLBSLOC") return;
+                    if (arguments.empty()) {
+                        ESP_LOGW(TAG, "URC MLBSLOC: no arguments");
+                        return;
+                    }
+
                     status_code = arguments[0].int_value;
-                    if (arguments[1].type == AtArgumentValue::Type::String) {
-                        longitude = arguments[1].string_value;
-                    } else {
-                        longitude = std::to_string(arguments[1].double_value);
-                    }
-                    if (arguments[2].type == AtArgumentValue::Type::String) {
-                        latitude = arguments[2].string_value;
-                    } else {
-                        latitude = std::to_string(arguments[2].double_value);
-                    }
-                    if (arguments.size() >= 4) {
-                        if (arguments[3].type == AtArgumentValue::Type::Int) {
-                            accuracy = std::to_string(arguments[3].int_value);
-                        } else if (arguments[3].type == AtArgumentValue::Type::String) {
-                            accuracy = arguments[3].string_value;
+                    got_status = true;
+                    ESP_LOGI(TAG, "URC MLBSLOC status code: %d", status_code);
+
+                    if (arguments.size() >= 3) {
+                        longitude = arguments[1].type == AtArgumentValue::Type::String ?
+                                    arguments[1].string_value : std::to_string(arguments[1].double_value);
+                        latitude = arguments[2].type == AtArgumentValue::Type::String ?
+                                   arguments[2].string_value : std::to_string(arguments[2].double_value);
+                        if (arguments.size() >= 4) {
+                            accuracy = arguments[3].type == AtArgumentValue::Type::Int ?
+                                       std::to_string(arguments[3].int_value) :
+                                       (arguments[3].type == AtArgumentValue::Type::String ?
+                                        arguments[3].string_value : std::to_string(arguments[3].double_value));
                         } else {
-                            accuracy = std::to_string(arguments[3].double_value);
+                            accuracy = "500";
                         }
+                        ESP_LOGI(TAG, "URC MLBSLOC location: lon=%s, lat=%s, acc=%s",
+                                 longitude.c_str(), latitude.c_str(), accuracy.c_str());
+                        got_location = true;
+                        xSemaphoreGive(semaphore);
                     } else {
-                        accuracy = "500";
+                        ESP_LOGW(TAG, "URC MLBSLOC: only status received, no coordinates");
+                        // 只收到状态码，不释放信号量，等待完整响应
                     }
-                    ESP_LOGI(TAG, "URC MLBSLOC parsed: status=%d, lon=%s, lat=%s, acc=%s",
-                             status_code, longitude.c_str(), latitude.c_str(), accuracy.c_str());
-                    xSemaphoreGive(semaphore);
-                }
-            });
+                });
 
-        // 发送 AT+MLBSLOC
-        ESP_LOGI(TAG, "Sending AT+MLBSLOC...");
-        if (!SendAtCommand("AT+MLBSLOC", 30000, 1)) {
-            at_uart->UnregisterUrcCallback(callback_it);
-            vSemaphoreDelete(semaphore);
-            ResumeAudioOutput();
-            return std::string("{\"error\":\"Failed to send LBS location request.\"}");
-        }
-
-        // 同时检查 GetResponse（可能是同步响应）
-        std::string response = at_uart->GetResponse();
-        ESP_LOGI(TAG, "LBS GetResponse: [%s]", response.c_str());
-
-        // 如果 GetResponse 没有数据，尝试从 URC 回调获取
-        if (response.empty() || response.find("+MLBSLOC:") == std::string::npos) {
-            ESP_LOGI(TAG, "No +MLBSLOC: in GetResponse, waiting for URC callback (max 30s)...");
-            if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(30000)) != pdTRUE) {
-                ESP_LOGW(TAG, "URC callback timeout (30s)");
+            ESP_LOGI(TAG, "Sending AT+MLBSLOC...");
+            if (!SendAtCommand("AT+MLBSLOC", 30000, 1)) {
                 at_uart->UnregisterUrcCallback(callback_it);
                 vSemaphoreDelete(semaphore);
-                ResumeAudioOutput();
-                return std::string("{\"error\":\"LBS location timeout. URC callback not triggered.\"}");
+                continue;
             }
-        } else {
-            // 从 GetResponse 解析
-            ESP_LOGI(TAG, "Parsing +MLBSLOC: from GetResponse...");
-            ParseLbsResponse(response, status_code, longitude, latitude, accuracy);
-        }
 
-        at_uart->UnregisterUrcCallback(callback_it);
-        vSemaphoreDelete(semaphore);
+            // 检查同步响应
+            std::string response = at_uart->GetResponse();
+            ESP_LOGI(TAG, "LBS GetResponse: [%s]", response.c_str());
+            if (!response.empty() && response.find("+MLBSLOC:") != std::string::npos) {
+                ParseLbsResponse(response, status_code, longitude, latitude, accuracy);
+                got_location = true;
+            }
+
+            // 等待 URC 回调，最多 15 秒
+            if (!got_location) {
+                ESP_LOGI(TAG, "Waiting for URC callback (max 15s)...");
+                if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(15000)) == pdTRUE) {
+                    ESP_LOGI(TAG, "URC callback received location");
+                } else {
+                    ESP_LOGW(TAG, "URC callback timeout on attempt %d", attempt + 1);
+                }
+            }
+
+            at_uart->UnregisterUrcCallback(callback_it);
+            vSemaphoreDelete(semaphore);
+
+            if (got_location) {
+                ResumeAudioOutput();
+                if (status_code != 100) {
+                    return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
+                }
+                std::string result = "{\"type\":\"lbs\",\"latitude\":" + latitude +
+                                     ",\"longitude\":" + longitude +
+                                     ",\"accuracy\":" + accuracy + "}";
+                ESP_LOGI(TAG, "=== HandleGetLbs END: %s", result.c_str());
+                return result;
+            }
+
+            if (got_status && status_code != 100) {
+                // 已经收到明确错误状态，不需要再重试
+                ResumeAudioOutput();
+                return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
+            }
+
+            // 等待一会再重试
+            if (attempt < max_attempts - 1) {
+                ESP_LOGI(TAG, "Waiting 3s before retry...");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            }
+        }
 
         ResumeAudioOutput();
-
-        ESP_LOGI(TAG, "LBS result: status=%d, lon=%s, lat=%s, acc=%s",
-                 status_code, longitude.c_str(), latitude.c_str(), accuracy.c_str());
-
-        if (status_code != 100) {
-            return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + ".\"}");
-        }
-
-        std::string result = BuildLbsJson(latitude, longitude, accuracy);
-        ESP_LOGI(TAG, "=== HandleGetLbs END: %s", result.c_str());
-        return result;
+        return std::string("{\"error\":\"LBS timeout: no location response from network after retries\"}");
     }
 
     bool ParseLbsResponse(const std::string& response, int& status_code,
                           std::string& longitude, std::string& latitude, std::string& accuracy) {
         size_t pos = response.find("+MLBSLOC:");
         if (pos == std::string::npos) return false;
-
         std::string data = response.substr(pos + 9);
         while (!data.empty() && data[0] == ' ') data = data.substr(1);
-
         auto parts = SplitByComma(data);
-        if (parts.size() < 3) return false;
-
+        if (parts.empty()) return false;
         try {
             status_code = std::stoi(parts[0]);
-            longitude = parts[1];
-            latitude = parts[2];
-            if (parts.size() >= 4) accuracy = parts[3]; else accuracy = "500";
+            if (parts.size() >= 3) {
+                longitude = parts[1];
+                latitude = parts[2];
+                accuracy = parts.size() >= 4 ? parts[3] : "500";
+            }
         } catch (...) {
             return false;
         }
-
         return true;
     }
-
-    std::string BuildLbsJson(const std::string& lat, const std::string& lon, const std::string& acc) {
-        return "{\"type\":\"lbs\",\"latitude\":" + lat +
-               ",\"longitude\":" + lon +
-               ",\"accuracy\":" + acc + "}";
-    }
-
-    // ==================== Combined ====================
-
-    ReturnValue HandleGetCurrent() {
-        ESP_LOGI(TAG, "=== HandleGetCurrent START ===");
-
-        auto gnss_result = HandleGetGnss();
-        std::string result = std::get<std::string>(gnss_result);
-
-        if (result.find("\"error\"") == std::string::npos) {
-            return result;
-        }
-
-        ESP_LOGI(TAG, "GNSS failed, falling back to LBS...");
-        return HandleGetLbs();
-    }
-
-    // ==================== Utility ====================
 
     static std::vector<std::string> SplitByComma(const std::string& str) {
         std::vector<std::string> parts;

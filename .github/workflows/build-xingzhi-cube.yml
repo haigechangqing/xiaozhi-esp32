@@ -34,7 +34,9 @@ on:
       - 'sdkconfig.defaults.esp32s3'
       - 'partitions/**'
       - '.github/workflows/build-xingzhi-cube.yml'
-      - 'ota.json'
+      # 排除 CI 自动提交的文件，防止无限循环
+      - '!update/**'
+      - '!ota.json'
 
 permissions:
   contents: write
@@ -85,8 +87,8 @@ jobs:
           | `merged-binary.bin` | USB 刷入（完整固件，地址 0x0） |
           | `xiaozhi.bin` | OTA 升级（仅 app 固件） |
 
-          ## OTA 升级（国内可用 gh-proxy 镜像）
-          对设备说：**"帮我升级固件，地址是 https://gh-proxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v${{ steps.version.outputs.version }}-xingzhi-cube/xiaozhi.bin"**
+          ## OTA 升级
+          对设备说：**"帮我升级固件"**，固件会从最新 Release 下载。
           BODYEOF
 
       - name: Delete old tag and release
@@ -114,18 +116,20 @@ jobs:
           prerelease: true
           make_latest: true
 
-      - name: Copy OTA firmware to update directory
+      - name: Update OTA firmware in repository
         shell: bash
         run: |
           mkdir -p update
           cp build/xiaozhi.bin update/xiaozhi.bin
           ls -lh update/xiaozhi.bin
-
-      - name: Update ota.json
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
-        shell: bash
-        run: |
-          cat > ota.json << JSONEOF
+          
+          git config user.email "ci@github-actions.local"
+          git config user.name "GitHub Actions"
+          git add update/xiaozhi.bin
+          
+          # workflow_dispatch 时同时更新 ota.json 版本号
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.upload_to_release }}" = "true" ]; then
+            cat > ota.json << JSONEOF
           {
             "firmware": {
               "version": "${{ steps.version.outputs.version }}",
@@ -133,8 +137,10 @@ jobs:
             }
           }
           JSONEOF
-          git config user.email "ci@github-actions.local"
-          git config user.name "GitHub Actions"
-          git add ota.json update/xiaozhi.bin
-          git commit -m "chore: update ota.json and firmware to v${{ steps.version.outputs.version }}" || true
-          git push origin main
+            git add ota.json
+            git commit -m "chore: update firmware to v${{ steps.version.outputs.version }} [skip ci]" || true
+          else
+            git commit -m "chore: update OTA firmware binary [skip ci]" || true
+          fi
+          
+          git push origin main || true
