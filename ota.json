@@ -1,6 +1,6 @@
 {
   "firmware": {
-    "version": "2.4.1",
-    "url": "https://gh-proxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v2.4.1-xingzhi-cube/xiaozhi.bin"
+    "version": "2.4.2",
+    "url": "https://ghproxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v2.4.2-xingzhi-cube/xiaozhi.bin"
   }
 }
