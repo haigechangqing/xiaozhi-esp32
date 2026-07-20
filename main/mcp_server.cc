@@ -149,7 +149,7 @@ void McpServer::AddUserOnlyTools() {
         });
 
     // Firmware upgrade
-    AddUserOnlyTool("self.upgrade_firmware", "Upgrade firmware from the latest release. This will download and install the firmware, then reboot the device. If no URL is specified, the default release URL will be used.",
+    AddTool("self.upgrade_firmware", "Upgrade firmware from the latest release. This will download and install the firmware, then reboot the device. If no URL is specified, the default release URL will be used.",
         PropertyList({
             Property("url", kPropertyTypeString, std::string("https://gh-proxy.com/https://github.com/haigechangqing/xiaozhi-esp32/releases/download/v2.4.0-xingzhi-cube/xiaozhi.bin"))
         }),

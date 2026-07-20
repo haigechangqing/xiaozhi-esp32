@@ -3,6 +3,7 @@
 
 #include "mcp_server.h"
 #include "board.h"
+#include "audio_codec.h"
 #include <at_modem.h>
 #include <at_uart.h>
 #include <string>
@@ -136,8 +137,16 @@ private:
 
         auto at_uart = modem->GetAtUart();
 
+        // 禁用音频输出，避免 UHCI DMA 被音频数据占用导致 AT 命令发送失败
+        auto* audio_codec = Board::GetInstance().GetAudioCodec();
+        if (audio_codec) {
+            audio_codec->EnableOutput(false);
+            vTaskDelay(pdMS_TO_TICKS(100)); // 等待音频输出完全停止
+        }
+
         // Power on GNSS
         if (!PowerOnGnss()) {
+            if (audio_codec) audio_codec->EnableOutput(true);
             return std::string("{\"error\":\"Failed to power on GNSS module.\"}");
         }
 
@@ -169,6 +178,11 @@ private:
 
         // Power off GNSS to save power
         PowerOffGnss();
+
+        // 恢复音频输出
+        if (audio_codec) {
+            audio_codec->EnableOutput(true);
+        }
 
         if (!got_fix) {
             return std::string("{\"error\":\"GNSS fix timeout. Ensure antenna is connected and device has clear sky view.\"}");
@@ -289,8 +303,16 @@ private:
 
         auto at_uart = modem->GetAtUart();
 
+        // 禁用音频输出，避免 UHCI DMA 被音频数据占用导致 AT 命令发送失败
+        auto* audio_codec = Board::GetInstance().GetAudioCodec();
+        if (audio_codec) {
+            audio_codec->EnableOutput(false);
+            vTaskDelay(pdMS_TO_TICKS(100)); // 等待音频输出完全停止
+        }
+
         // 确保 LBS 服务已配置
         if (!ConfigureLbs()) {
+            if (audio_codec) audio_codec->EnableOutput(true);
             return std::string("{\"error\":\"Failed to configure LBS service.\"}");
         }
 
@@ -298,6 +320,7 @@ private:
         // SemaphoreHandle_t 用于等待回调
         SemaphoreHandle_t semaphore = xSemaphoreCreateBinary();
         if (!semaphore) {
+            if (audio_codec) audio_codec->EnableOutput(true);
             return std::string("{\"error\":\"Failed to create semaphore.\"}");
         }
 
@@ -308,7 +331,7 @@ private:
         // 注册 URC 回调：AtUart 在收到 +MLBSLOC: 时会调用此回调
         auto callback_it = at_uart->RegisterUrcCallback(
             [&](const std::string& command, const std::vector<AtArgumentValue>& arguments) {
-                if (command == "+MLBSLOC" && arguments.size() >= 3) {
+                if (command == "MLBSLOC" && arguments.size() >= 3) {
                     status_code = arguments[0].int_value;
                     if (arguments[1].type == AtArgumentValue::Type::String) {
                         longitude = arguments[1].string_value;
@@ -339,6 +362,7 @@ private:
         if (!SendAtCommand("AT+MLBSLOC")) {
             at_uart->UnregisterUrcCallback(callback_it);
             vSemaphoreDelete(semaphore);
+            if (audio_codec) audio_codec->EnableOutput(true);
             return std::string("{\"error\":\"Failed to send LBS location request.\"}");
         }
 
@@ -348,11 +372,17 @@ private:
         if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(30000)) != pdTRUE) {
             at_uart->UnregisterUrcCallback(callback_it);
             vSemaphoreDelete(semaphore);
+            if (audio_codec) audio_codec->EnableOutput(true);
             return std::string("{\"error\":\"LBS location timeout. Check network and SIM card.\"}");
         }
 
         at_uart->UnregisterUrcCallback(callback_it);
         vSemaphoreDelete(semaphore);
+
+        // 恢复音频输出
+        if (audio_codec) {
+            audio_codec->EnableOutput(true);
+        }
 
         ESP_LOGI(TAG, "LBS result: status=%d, lon=%s, lat=%s, acc=%s",
                  status_code, longitude.c_str(), latitude.c_str(), accuracy.c_str());
