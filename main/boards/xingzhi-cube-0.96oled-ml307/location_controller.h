@@ -42,13 +42,12 @@ public:
             });
 
         mcp_server.AddTool("self.location.get_current",
-            "Get current location using the best available method.\n"
-            "Tries GNSS satellite positioning first; if it fails (no fix within timeout),\n"
-            "automatically falls back to cellular LBS positioning.\n"
-            "Returns JSON with type, latitude, longitude, and optional altitude/accuracy.",
+            "Get current location using cellular LBS positioning by default.\n"
+            "Fast and reliable. Does not require GNSS antenna.\n"
+            "Returns JSON with type, latitude, longitude, and accuracy.",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
-                return HandleGetCurrent();
+                return HandleGetLbs();
             });
     }
 
@@ -132,6 +131,18 @@ private:
 
     // ==================== GNSS Power Management ====================
 
+    void LogAtResponse(const char* command_name) {
+        auto* modem = GetModem();
+        if (!modem) return;
+        auto at_uart = modem->GetAtUart();
+        std::string response = at_uart->GetResponse();
+        if (response.empty()) {
+            ESP_LOGW(TAG, "GNSS %s: no response (module may not support this command)", command_name);
+        } else {
+            ESP_LOGI(TAG, "GNSS %s response: [%s]", command_name, response.c_str());
+        }
+    }
+
     bool PowerOnGnss() {
         if (gnss_powered_on_) {
             ESP_LOGI(TAG, "GNSS already powered on");
@@ -142,37 +153,71 @@ private:
         if (!modem) return false;
         auto at_uart = modem->GetAtUart();
 
-        // 诊断：查询当前 GNSS 电源状态
-        ESP_LOGI(TAG, "GNSS diagnosis: querying current power state...");
-        if (SendAtCommand("AT+CGNSSPWR?", 3000, 2)) {
-            ESP_LOGI(TAG, "GNSS power state response: %s", at_uart->GetResponse().c_str());
+        // 诊断：测试基础 AT 通信
+        ESP_LOGI(TAG, "GNSS diagnosis: basic AT test...");
+        if (SendAtCommand("AT", 3000, 2)) {
+            ESP_LOGI(TAG, "GNSS diagnosis: AT command works");
+        } else {
+            ESP_LOGE(TAG, "GNSS diagnosis: AT command failed, modem not responding");
+            return false;
         }
 
-        // 诊断：查询 GNSS 命令支持情况
-        ESP_LOGI(TAG, "GNSS diagnosis: querying command help...");
+        // 诊断：查询当前 GNSS 电源状态
+        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGNSSPWR?...");
+        if (SendAtCommand("AT+CGNSSPWR?", 3000, 2)) {
+            LogAtResponse("AT+CGNSSPWR?");
+        } else {
+            LogAtResponse("AT+CGNSSPWR?");
+        }
+
+        // 诊断：查询 GNSS 信息命令支持情况
+        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGNSSINFO=?...");
         if (SendAtCommand("AT+CGNSSINFO=?", 3000, 2)) {
-            ESP_LOGI(TAG, "GNSS INFO help: %s", at_uart->GetResponse().c_str());
+            LogAtResponse("AT+CGNSSINFO=?");
+        } else {
+            LogAtResponse("AT+CGNSSINFO=?");
+        }
+
+        // 诊断：查询模块是否支持 GPS/GLONASS 相关命令
+        ESP_LOGI(TAG, "GNSS diagnosis: AT+CGPS=?...");
+        if (SendAtCommand("AT+CGPS=?", 3000, 2)) {
+            LogAtResponse("AT+CGPS=?");
+        } else {
+            LogAtResponse("AT+CGPS=?");
         }
 
         // 尝试标准命令 AT+CGNSSPWR=1
         ESP_LOGI(TAG, "Powering on GNSS (AT+CGNSSPWR=1)...");
         if (SendAtCommand("AT+CGNSSPWR=1", 5000, 5, 2000)) {
+            LogAtResponse("AT+CGNSSPWR=1");
             gnss_powered_on_ = true;
-            ESP_LOGI(TAG, "GNSS powered on, waiting for module to initialize (2s)...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            ESP_LOGI(TAG, "GNSS powered on, waiting for module to initialize (3s)...");
+            vTaskDelay(pdMS_TO_TICKS(3000));
             return true;
         }
 
         // 备用命令：AT+CGNSSPWR=1,1（某些模块需要第二个参数）
         ESP_LOGW(TAG, "Standard power on failed, trying AT+CGNSSPWR=1,1...");
         if (SendAtCommand("AT+CGNSSPWR=1,1", 5000, 3, 2000)) {
+            LogAtResponse("AT+CGNSSPWR=1,1");
             gnss_powered_on_ = true;
-            ESP_LOGI(TAG, "GNSS powered on with AT+CGNSSPWR=1,1, waiting (2s)...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
+            ESP_LOGI(TAG, "GNSS powered on with AT+CGNSSPWR=1,1, waiting (3s)...");
+            vTaskDelay(pdMS_TO_TICKS(3000));
             return true;
         }
 
-        ESP_LOGE(TAG, "Failed to power on GNSS. Possible reasons: GNSS antenna not connected, module variant does not support GNSS, or different AT command required.");
+        // 备用命令：AT+CGPS=1（移远/合宙模块常用格式）
+        ESP_LOGW(TAG, "Trying legacy AT+CGPS=1...");
+        if (SendAtCommand("AT+CGPS=1", 5000, 3, 2000)) {
+            LogAtResponse("AT+CGPS=1");
+            gnss_powered_on_ = true;
+            ESP_LOGI(TAG, "GNSS powered on with AT+CGPS=1, waiting (3s)...");
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            return true;
+        }
+
+        ESP_LOGE(TAG, "Failed to power on GNSS. Module reports support but command execution failed.");
+        ESP_LOGE(TAG, "Possible reasons: GNSS antenna not connected, GNSS shared RF with 4G (disable data first), wrong firmware variant, or module requires different power-on sequence.");
         return false;
     }
 
