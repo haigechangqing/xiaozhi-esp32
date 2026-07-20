@@ -121,12 +121,12 @@ jobs:
 
       - name: Update OTA firmware in repository
         shell: bash
-        working-directory: ${{ github.workspace }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -x
-          cd ${{ github.workspace }}
+          # In the espressif/idf container, the repo is mounted at /__w/xiaozhi-esp32/xiaozhi-esp32
+          cd /__w/xiaozhi-esp32/xiaozhi-esp32
           mkdir -p update
           cp build/xiaozhi.bin update/xiaozhi.bin
           ls -lh update/xiaozhi.bin
