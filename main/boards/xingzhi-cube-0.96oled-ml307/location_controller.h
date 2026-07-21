@@ -1,6 +1,12 @@
 #ifndef LOCATION_CONTROLLER_H
 #define LOCATION_CONTROLLER_H
 
+#include <sdkconfig.h>
+
+#ifndef CONFIG_LOCATION_AMAP_KEY
+#define CONFIG_LOCATION_AMAP_KEY ""
+#endif
+
 #include "mcp_server.h"
 #include "board.h"
 #include "audio_codec.h"
