@@ -1067,10 +1067,28 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     audio_service_.Stop();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
-    bool upgrade_success = Ota::Upgrade(upgrade_url, [this, display](int progress, size_t speed) {
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-        Schedule([display, message = std::string(buffer)]() {
+    bool upgrade_success = Ota::Upgrade(upgrade_url, [this, display](const std::string& stage, int progress, size_t speed) {
+        std::string message;
+        if (stage == "connecting") {
+            message = "正在连接服务器...";
+        } else if (stage == "downloading") {
+            char buffer[48];
+            snprintf(buffer, sizeof(buffer), "正在下载固件 %d%% (%uKB/s)", progress, speed / 1024);
+            message = buffer;
+        } else if (stage == "writing") {
+            char buffer[48];
+            snprintf(buffer, sizeof(buffer), "正在写入闪存 %d%%", progress);
+            message = buffer;
+        } else if (stage == "verifying") {
+            message = "正在校验固件...";
+        } else if (stage == "complete") {
+            message = "升级完成，正在重启...";
+        } else {
+            char buffer[48];
+            snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+            message = buffer;
+        }
+        Schedule([display, message]() {
             display->SetChatMessage("system", message.c_str());
         });
     });

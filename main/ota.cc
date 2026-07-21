@@ -269,7 +269,7 @@ void Ota::MarkCurrentVersionValid() {
     }
 }
 
-bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback) {
+bool Ota::Upgrade(const std::string& firmware_url, std::function<void(const std::string& stage, int progress, size_t speed)> callback) {
     ESP_LOGI(TAG, "Upgrading firmware from %s", firmware_url.c_str());
     esp_ota_handle_t update_handle = 0;
     auto update_partition = esp_ota_get_next_update_partition(NULL);
@@ -281,6 +281,10 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
     ESP_LOGI(TAG, "Writing to partition %s at offset 0x%lx", update_partition->label, update_partition->address);
     bool image_header_checked = false;
     std::string image_header;
+
+    if (callback) {
+        callback("connecting", 0, 0);
+    }
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
@@ -326,7 +330,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
             size_t progress = total_read * 100 / content_length;
             ESP_LOGI(TAG, "Progress: %u%% (%u/%u), Speed: %uB/s", progress, total_read, content_length, recent_read);
             if (callback) {
-                callback(progress, recent_read);
+                callback("downloading", progress, recent_read);
             }
             last_calc_time = esp_timer_get_time();
             recent_read = 0;
@@ -353,6 +357,9 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
         // Write to flash when buffer is full (4KB) or it's the last chunk
         bool is_last_chunk = (ret == 0);
         if (buffer_offset == PAGE_SIZE || (is_last_chunk && buffer_offset > 0)) {
+            if (callback) {
+                callback("writing", total_read * 100 / content_length, recent_read);
+            }
             auto err = esp_ota_write(update_handle, buffer, buffer_offset);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to write OTA data: %s", esp_err_to_name(err));
@@ -371,6 +378,9 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
     http->Close();
     heap_caps_free(buffer);
 
+    if (callback) {
+        callback("verifying", 100, 0);
+    }
     esp_err_t err = esp_ota_end(update_handle);
     if (err != ESP_OK) {
         if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
@@ -388,10 +398,13 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
     }
 
     ESP_LOGI(TAG, "Firmware upgrade successful");
+    if (callback) {
+        callback("complete", 100, 0);
+    }
     return true;
 }
 
-bool Ota::StartUpgrade(std::function<void(int progress, size_t speed)> callback) {
+bool Ota::StartUpgrade(std::function<void(const std::string& stage, int progress, size_t speed)> callback) {
     return Upgrade(firmware_url_, callback);
 }
 

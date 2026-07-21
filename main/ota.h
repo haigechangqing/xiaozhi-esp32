@@ -20,8 +20,8 @@ public:
     bool HasWebsocketConfig() { return has_websocket_config_; }
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
-    bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
-    static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
+    bool StartUpgrade(std::function<void(const std::string& stage, int progress, size_t speed)> callback);
+    static bool Upgrade(const std::string& firmware_url, std::function<void(const std::string& stage, int progress, size_t speed)> callback);
     static std::string GetFirmwareVersionFromUrl(const std::string& firmware_url);
     static bool IsVersionNewer(const std::string& current_version, const std::string& remote_version);
     void MarkCurrentVersionValid();
@@ -50,7 +50,6 @@ private:
     std::string serial_number_;
     int activation_timeout_ms_ = 30000;
 
-    std::function<void(int progress, size_t speed)> upgrade_callback_;
     std::vector<int> ParseVersion(const std::string& version);
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);
     std::string GetActivationPayload();
