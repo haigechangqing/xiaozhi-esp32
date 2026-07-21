@@ -1051,7 +1051,6 @@ menu "TAIJIPAI_S3_CONFIG"
     config LOCATION_AMAP_KEY
         string "Amap Web Service API key"
         default ""
-        depends on LOCATION_GEOCODING_PROVIDER = 1
         help
             Get an Amap Web Service API key at https://console.amap.com/dev/key/app
 
