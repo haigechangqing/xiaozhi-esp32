@@ -1088,9 +1088,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
             snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
             message = buffer;
         }
-        Schedule([display, message]() {
-            display->SetChatMessage("system", message.c_str());
-        });
+        display->SetChatMessage("system", message.c_str());
     });
 
     if (!upgrade_success) {
