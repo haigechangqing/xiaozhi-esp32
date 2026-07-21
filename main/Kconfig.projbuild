@@ -1041,6 +1041,10 @@ menu "TAIJIPAI_S3_CONFIG"
     default y
     help
         启动双声道
+
+endmenu
+
+menu "Location Settings"
     config LOCATION_GEOCODING_PROVIDER
         int "Reverse geocoding provider (0=BigDataCloud free, 1=Amap)"
         default 1
@@ -1053,7 +1057,6 @@ menu "TAIJIPAI_S3_CONFIG"
         default ""
         help
             Get an Amap Web Service API key at https://console.amap.com/dev/key/app
-
 endmenu
 
 endmenu
