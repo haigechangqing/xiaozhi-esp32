@@ -27,6 +27,11 @@
 class LocationController {
 public:
     LocationController() {
+#if CONFIG_LOCATION_GEOCODING_PROVIDER == 1
+        ESP_LOGI(TAG, "Location geocoding provider: Amap (key=%.8s...)", CONFIG_LOCATION_AMAP_KEY);
+#else
+        ESP_LOGI(TAG, "Location geocoding provider: BigDataCloud");
+#endif
         auto& mcp_server = McpServer::GetInstance();
 
         // ML307R-DL 模块不支持 GNSS 卫星定位
@@ -73,8 +78,9 @@ private:
         auto& app = Application::GetInstance();
         ESP_LOGI(TAG, "PauseAudioOutput: state=%d", (int)app.GetDeviceState());
         app.AbortSpeaking(kAbortReasonNone);
-        ESP_LOGI(TAG, "Waiting 10s for UHCI to become free...");
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        // 暂停音频输出并等待 UHCI 资源释放；ML307 模组定位不需要长时间占用，3 秒通常足够
+        ESP_LOGI(TAG, "Waiting 3s for UHCI to become free...");
+        vTaskDelay(pdMS_TO_TICKS(3000));
         auto* audio_codec = Board::GetInstance().GetAudioCodec();
         if (audio_codec) {
             ESP_LOGI(TAG, "Disabling I2S audio output...");
@@ -130,7 +136,12 @@ private:
 
     std::string ReverseGeocode(const std::string& latitude, const std::string& longitude) {
 #if CONFIG_LOCATION_GEOCODING_PROVIDER == 1
-        return ReverseGeocodeAmap(latitude, longitude);
+        std::string address = ReverseGeocodeAmap(latitude, longitude);
+        if (!address.empty()) {
+            return address;
+        }
+        ESP_LOGW(TAG, "Amap geocoding failed, fallback to BigDataCloud");
+        return ReverseGeocodeBigDataCloud(latitude, longitude);
 #else
         return ReverseGeocodeBigDataCloud(latitude, longitude);
 #endif
@@ -334,19 +345,44 @@ private:
                 continue;
             }
 
-            // 检查同步响应
+            // 检查同步响应：部分模组会在命令同步响应里直接返回 +MLBSLOC: 结果
             std::string response = at_uart->GetResponse();
             ESP_LOGI(TAG, "LBS GetResponse: [%s]", response.c_str());
             if (!response.empty() && response.find("+MLBSLOC:") != std::string::npos) {
                 if (ParseLbsResponse(response, status_code, longitude, latitude, accuracy)) {
-                    got_location = true;
+                    got_status = true;
+                    if (status_code == 100) {
+                        got_location = true;
+                        ESP_LOGI(TAG, "LBS location obtained from synchronous response");
+                    }
                 }
             }
 
-            // 等待 URC 回调，最多 15 秒
+            // 同步响应已拿到坐标，无需等待 URC
+            if (got_location) {
+                at_uart->UnregisterUrcCallback(callback_it);
+                vSemaphoreDelete(semaphore);
+                break;
+            }
+
+            // 同步响应只有错误状态码，不等待 URC，直接按状态码处理
+            if (got_status && status_code != 100) {
+                at_uart->UnregisterUrcCallback(callback_it);
+                vSemaphoreDelete(semaphore);
+                if (status_code == 124 && attempt < max_attempts - 1) {
+                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying...", attempt + 1);
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    continue;
+                } else {
+                    ResumeAudioOutput();
+                    return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
+                }
+            }
+
+            // 等待 URC 回调，最多 10 秒
             if (!got_location) {
-                ESP_LOGI(TAG, "Waiting for URC callback (max 15s)...");
-                if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(15000)) == pdTRUE) {
+                ESP_LOGI(TAG, "Waiting for URC callback (max 10s)...");
+                if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(10000)) == pdTRUE) {
                     ESP_LOGI(TAG, "URC callback received location");
                 } else {
                     ESP_LOGW(TAG, "URC callback timeout on attempt %d", attempt + 1);
