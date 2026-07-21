@@ -54,6 +54,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Build firmware
         shell: bash
@@ -132,6 +135,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          persist-credentials: true
           token: ${{ github.token }}
           fetch-depth: 0
 
@@ -151,6 +155,7 @@ jobs:
           cp artifacts/xiaozhi.bin update/xiaozhi.bin
           ls -lh update/xiaozhi.bin
 
+          git config --global --add safe.directory "$(pwd)"
           git config user.email "ci@github-actions.local"
           git config user.name "GitHub Actions"
           git add -f update/xiaozhi.bin
