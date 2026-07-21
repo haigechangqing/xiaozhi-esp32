@@ -27,11 +27,13 @@
 class LocationController {
 public:
     LocationController() {
-#if CONFIG_LOCATION_GEOCODING_PROVIDER == 1
-        ESP_LOGI(TAG, "Location geocoding provider: Amap (key=%.8s...)", CONFIG_LOCATION_AMAP_KEY);
-#else
-        ESP_LOGI(TAG, "Location geocoding provider: BigDataCloud");
-#endif
+        bool use_amap = (CONFIG_LOCATION_GEOCODING_PROVIDER == 1) ||
+                        (std::string(CONFIG_LOCATION_AMAP_KEY).length() > 0);
+        if (use_amap) {
+            ESP_LOGI(TAG, "Location geocoding provider: Amap (key=%.8s...)", CONFIG_LOCATION_AMAP_KEY);
+        } else {
+            ESP_LOGI(TAG, "Location geocoding provider: BigDataCloud");
+        }
         auto& mcp_server = McpServer::GetInstance();
 
         // ML307R-DL 模块不支持 GNSS 卫星定位
@@ -135,16 +137,17 @@ private:
     }
 
     std::string ReverseGeocode(const std::string& latitude, const std::string& longitude) {
-#if CONFIG_LOCATION_GEOCODING_PROVIDER == 1
-        std::string address = ReverseGeocodeAmap(latitude, longitude);
-        if (!address.empty()) {
-            return address;
+        // 只要配置了高德 key 就优先使用高德；避免 sdkconfig 缓存导致 provider 未生效
+        bool use_amap = (CONFIG_LOCATION_GEOCODING_PROVIDER == 1) ||
+                        (std::string(CONFIG_LOCATION_AMAP_KEY).length() > 0);
+        if (use_amap) {
+            std::string address = ReverseGeocodeAmap(latitude, longitude);
+            if (!address.empty()) {
+                return address;
+            }
+            ESP_LOGW(TAG, "Amap geocoding failed, fallback to BigDataCloud");
         }
-        ESP_LOGW(TAG, "Amap geocoding failed, fallback to BigDataCloud");
         return ReverseGeocodeBigDataCloud(latitude, longitude);
-#else
-        return ReverseGeocodeBigDataCloud(latitude, longitude);
-#endif
     }
 
     std::string ReverseGeocodeBigDataCloud(const std::string& latitude, const std::string& longitude) {

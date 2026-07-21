@@ -59,6 +59,9 @@ jobs:
         shell: bash
         run: |
           source $IDF_PATH/export.sh
+          # 清除旧的 sdkconfig，确保 sdkconfig.defaults 中的配置生效（如地理编码 provider）
+          rm -f sdkconfig
+          idf.py fullclean 2>/dev/null || true
           python scripts/release.py xingzhi-cube-0.96oled-ml307 --name xingzhi-cube-0.96oled-ml307
 
       - name: Get version
