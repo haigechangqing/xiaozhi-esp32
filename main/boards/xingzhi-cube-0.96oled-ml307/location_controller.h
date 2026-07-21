@@ -49,8 +49,9 @@ public:
         mcp_server.AddTool("self.location.get_lbs",
             "Get current location using cellular base station positioning (LBS).\n"
             "Works without GNSS antenna, only needs SIM card and cellular network.\n"
-            "Accuracy typically 50-500 meters. Fast response (3-5 seconds).\n"
-            "Returns JSON with type, latitude, longitude, accuracy, and address (if geocoding succeeds).",
+            "Accuracy typically 50-500 meters. Response time is usually 3-15 seconds.\n"
+            "Returns JSON with type, latitude, longitude, accuracy, address and a Chinese summary.\n"
+            "After receiving the result, you MUST briefly report the location to the user in Chinese, including the address and approximate accuracy.",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
                 return HandleGetLbs();
@@ -58,8 +59,9 @@ public:
 
         mcp_server.AddTool("self.location.get_current",
             "Get current location using cellular LBS positioning.\n"
-            "Fast and reliable. Does not require GNSS antenna.\n"
-            "Returns JSON with type, latitude, longitude, accuracy, and address (if geocoding succeeds).",
+            "Fast and reliable. Does not require GNSS antenna. Response time is usually 3-15 seconds.\n"
+            "Returns JSON with type, latitude, longitude, accuracy, address and a Chinese summary.\n"
+            "After receiving the result, you MUST briefly report the location to the user in Chinese, including the address and approximate accuracy.",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
                 return HandleGetLbs();
@@ -70,6 +72,13 @@ public:
 
 private:
     bool lbs_configured_ = false;
+
+    void SetDisplayMessage(const std::string& message) {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetChatMessage("system", message.c_str());
+        }
+    }
 
     AtModem* GetModem() {
         auto* network = Board::GetInstance().GetNetwork();
@@ -311,13 +320,16 @@ private:
         ESP_LOGI(TAG, "=== HandleGetLbs START ===");
         auto* modem = GetModem();
         if (!modem) {
+            SetDisplayMessage("定位失败：模组不可用");
             return std::string("{\"error\":\"Modem not available\"}");
         }
         auto at_uart = modem->GetAtUart();
 
         PauseAudioOutput();
+        SetDisplayMessage("正在定位…");
 
         if (!ConfigureLbs()) {
+            SetDisplayMessage("定位失败：LBS 配置失败");
             ResumeAudioOutput();
             return std::string("{\"error\":\"Failed to configure LBS\"}");
         }
@@ -326,9 +338,11 @@ private:
         const int max_attempts = 3;
         for (int attempt = 0; attempt < max_attempts; attempt++) {
             ESP_LOGI(TAG, "LBS attempt %d/%d", attempt + 1, max_attempts);
+            SetDisplayMessage("正在获取基站信息…（" + std::to_string(attempt + 1) + "/" + std::to_string(max_attempts) + "）");
 
             SemaphoreHandle_t semaphore = xSemaphoreCreateBinary();
             if (!semaphore) {
+                SetDisplayMessage("定位失败：内部错误");
                 ResumeAudioOutput();
                 return std::string("{\"error\":\"Failed to create semaphore\"}");
             }
@@ -438,11 +452,16 @@ private:
 
             if (got_location && status_code == 100) {
                 ResumeAudioOutput();
+                SetDisplayMessage("正在解析位置…");
                 std::string address = ReverseGeocode(latitude, longitude);
+
+                // 生成中文摘要，方便 LLM 直接播报
+                std::string summary = "当前定位在" + address + "附近，定位精度约" + accuracy + "米。";
+
                 // 同步在屏幕上显示定位结果，避免只显示工具调用名
                 auto display = Board::GetInstance().GetDisplay();
                 if (display) {
-                    display->SetChatMessage("system", address.c_str());
+                    display->SetChatMessage("system", (address + "\n精度约" + accuracy + "米").c_str());
                 }
                 cJSON* json = cJSON_CreateObject();
                 cJSON_AddStringToObject(json, "type", "lbs");
@@ -450,6 +469,7 @@ private:
                 cJSON_AddNumberToObject(json, "longitude", std::stod(longitude));
                 cJSON_AddNumberToObject(json, "accuracy", std::stod(accuracy));
                 cJSON_AddStringToObject(json, "address", address.c_str());
+                cJSON_AddStringToObject(json, "summary", summary.c_str());
                 char* str = cJSON_PrintUnformatted(json);
                 std::string result(str);
                 cJSON_free(str);
@@ -460,9 +480,11 @@ private:
 
             if (got_status && status_code != 100) {
                 if (status_code == 124 && attempt < max_attempts - 1) {
+                    SetDisplayMessage("基站定位忙，正在重试…");
                     ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying...", attempt + 1);
                 } else {
                     // 已经收到明确错误状态，不需要再重试
+                    SetDisplayMessage("定位失败：错误码 " + std::to_string(status_code));
                     ResumeAudioOutput();
                     return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
                 }
@@ -470,11 +492,13 @@ private:
 
             // 等待一会再重试
             if (attempt < max_attempts - 1) {
+                SetDisplayMessage("定位未成功，准备重试…");
                 ESP_LOGI(TAG, "Waiting 3s before retry...");
                 vTaskDelay(pdMS_TO_TICKS(3000));
             }
         }
 
+        SetDisplayMessage("定位失败：网络未返回位置信息");
         ResumeAudioOutput();
         return std::string("{\"error\":\"LBS timeout: no location response from network after retries\"}");
     }

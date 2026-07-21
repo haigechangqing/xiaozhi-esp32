@@ -86,7 +86,7 @@ jobs:
           if-no-files-found: error
 
       - name: Generate release notes
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release) }}
         shell: bash
         run: |
           cat > release_body.md << 'BODYEOF'
@@ -101,7 +101,7 @@ jobs:
           BODYEOF
 
       - name: Delete old tag and release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release) }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -113,7 +113,7 @@ jobs:
           git push origin --delete "$TAG" 2>/dev/null || true
 
       - name: Create/Update Release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_release }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release) }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}-xingzhi-cube
@@ -160,8 +160,8 @@ jobs:
           git config user.name "GitHub Actions"
           git add -f update/xiaozhi.bin
 
-          # workflow_dispatch 时同时更新 ota.json 版本号
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.upload_to_release }}" = "true" ]; then
+          # push 或 workflow_dispatch 且上传 release 时，同时更新 ota.json 版本号
+          if [ "${{ github.event_name }}" = "push" ] || ([ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.upload_to_release }}" = "true" ]); then
             cat > ota.json << JSONEOF
           {
             "firmware": {
