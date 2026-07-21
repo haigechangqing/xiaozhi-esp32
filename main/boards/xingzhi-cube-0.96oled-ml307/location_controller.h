@@ -14,6 +14,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <cJSON.h>
 
 #define TAG "LocationController"
 
@@ -36,7 +37,7 @@ public:
             "Get current location using cellular base station positioning (LBS).\n"
             "Works without GNSS antenna, only needs SIM card and cellular network.\n"
             "Accuracy typically 50-500 meters. Fast response (3-5 seconds).\n"
-            "Returns JSON with type, latitude, longitude, accuracy.",
+            "Returns JSON with type, latitude, longitude, accuracy, and address (if geocoding succeeds).",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
                 return HandleGetLbs();
@@ -45,7 +46,7 @@ public:
         mcp_server.AddTool("self.location.get_current",
             "Get current location using cellular LBS positioning.\n"
             "Fast and reliable. Does not require GNSS antenna.\n"
-            "Returns JSON with type, latitude, longitude, and accuracy.",
+            "Returns JSON with type, latitude, longitude, accuracy, and address (if geocoding succeeds).",
             PropertyList(),
             [this](const PropertyList& properties) -> ReturnValue {
                 return HandleGetLbs();
@@ -119,6 +120,54 @@ private:
         lbs_configured_ = true;
         ESP_LOGI(TAG, "LBS configured");
         return true;
+    }
+
+    std::string ReverseGeocode(const std::string& latitude, const std::string& longitude) {
+        std::string url = "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=" +
+                          latitude + "&longitude=" + longitude + "&localityLanguage=zh";
+        ESP_LOGI(TAG, "Reverse geocoding: %s", url.c_str());
+
+        auto network = Board::GetInstance().GetNetwork();
+        auto http = network->CreateHttp(0);
+        if (!http->Open("GET", url)) {
+            ESP_LOGE(TAG, "Failed to open geocoding URL");
+            return "";
+        }
+
+        if (http->GetStatusCode() != 200) {
+            ESP_LOGE(TAG, "Geocoding failed, status: %d", http->GetStatusCode());
+            http->Close();
+            return "";
+        }
+
+        std::string response = http->ReadAll();
+        http->Close();
+
+        cJSON* root = cJSON_Parse(response.c_str());
+        if (!root) {
+            ESP_LOGE(TAG, "Failed to parse geocoding response");
+            return "";
+        }
+
+        std::string address;
+        auto append_field = [&](const char* key) {
+            cJSON* item = cJSON_GetObjectItem(root, key);
+            if (cJSON_IsString(item) && strlen(item->valuestring) > 0) {
+                if (!address.empty()) {
+                    address += " ";
+                }
+                address += item->valuestring;
+            }
+        };
+
+        append_field("countryName");
+        append_field("principalSubdivision");
+        append_field("city");
+        append_field("locality");
+
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "Reverse geocoding result: %s", address.c_str());
+        return address;
     }
 
     ReturnValue HandleGetLbs() {
@@ -222,9 +271,17 @@ private:
                 if (status_code != 100) {
                     return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
                 }
-                std::string result = "{\"type\":\"lbs\",\"latitude\":" + latitude +
-                                     ",\"longitude\":" + longitude +
-                                     ",\"accuracy\":" + accuracy + "}";
+                std::string address = ReverseGeocode(latitude, longitude);
+                cJSON* json = cJSON_CreateObject();
+                cJSON_AddStringToObject(json, "type", "lbs");
+                cJSON_AddNumberToObject(json, "latitude", std::stod(latitude));
+                cJSON_AddNumberToObject(json, "longitude", std::stod(longitude));
+                cJSON_AddNumberToObject(json, "accuracy", std::stod(accuracy));
+                cJSON_AddStringToObject(json, "address", address.c_str());
+                char* str = cJSON_PrintUnformatted(json);
+                std::string result(str);
+                cJSON_free(str);
+                cJSON_Delete(json);
                 ESP_LOGI(TAG, "=== HandleGetLbs END: %s", result.c_str());
                 return result;
             }

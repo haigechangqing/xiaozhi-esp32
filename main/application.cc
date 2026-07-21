@@ -12,6 +12,7 @@
 
 #include <cstring>
 #include <esp_log.h>
+#include <esp_app_desc.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
@@ -1016,7 +1017,31 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     auto display = board.GetDisplay();
 
     std::string upgrade_url = url;
-    std::string version_info = version.empty() ? "(Manual upgrade)" : version;
+    std::string version_info = version;
+
+    // 获取远程固件版本号，若调用方未提供则通过 URL 读取固件头解析
+    if (version_info.empty()) {
+        version_info = Ota::GetFirmwareVersionFromUrl(upgrade_url);
+    }
+
+    if (version_info.empty()) {
+        ESP_LOGW(TAG, "Cannot determine remote firmware version, aborting upgrade");
+        Alert(Lang::Strings::ERROR, "无法获取远程固件版本", "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        return false;
+    }
+
+    auto app_desc = esp_app_get_description();
+    std::string current_version = app_desc->version;
+    ESP_LOGI(TAG, "Current version: %s, remote version: %s", current_version.c_str(), version_info.c_str());
+
+    if (!Ota::IsVersionNewer(current_version, version_info)) {
+        ESP_LOGI(TAG, "Remote firmware %s is not newer than current %s, no upgrade needed",
+                 version_info.c_str(), current_version.c_str());
+        Alert(Lang::Strings::INFO, "当前已是最新版本", "check", Lang::Sounds::OGG_SUCCESS);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        return false;
+    }
 
     // Close audio channel if it's open
     if (protocol_ && protocol_->IsAudioChannelOpened()) {

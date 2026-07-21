@@ -135,6 +135,14 @@ void McpServer::AddUserOnlyTools() {
             return board.GetSystemInfoJson();
         });
 
+    AddUserOnlyTool("self.get_firmware_version",
+        "获取当前设备固件版本号",
+        PropertyList(),
+        [this](const PropertyList& properties) -> ReturnValue {
+            auto app_desc = esp_app_get_description();
+            return std::string("{\"version\":\"") + app_desc->version + "\"}";
+        });
+
     AddUserOnlyTool("self.reboot", "Reboot the system",
         PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {

@@ -22,6 +22,8 @@ public:
     bool HasServerTime() { return has_server_time_; }
     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
     static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
+    static std::string GetFirmwareVersionFromUrl(const std::string& firmware_url);
+    static bool IsVersionNewer(const std::string& current_version, const std::string& remote_version);
     void MarkCurrentVersionValid();
 
     const std::string& GetFirmwareVersion() const { return firmware_version_; }

@@ -395,6 +395,53 @@ bool Ota::StartUpgrade(std::function<void(int progress, size_t speed)> callback)
     return Upgrade(firmware_url_, callback);
 }
 
+std::string Ota::GetFirmwareVersionFromUrl(const std::string& firmware_url) {
+    ESP_LOGI(TAG, "Reading firmware version from URL: %s", firmware_url.c_str());
+    auto network = Board::GetInstance().GetNetwork();
+    auto http = network->CreateHttp(0);
+    if (!http->Open("GET", firmware_url)) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection to read firmware version");
+        return "";
+    }
+
+    if (http->GetStatusCode() != 200) {
+        ESP_LOGE(TAG, "Failed to read firmware version, status code: %d", http->GetStatusCode());
+        http->Close();
+        return "";
+    }
+
+    constexpr size_t HEADER_SIZE = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
+    char buffer[HEADER_SIZE];
+    size_t total_read = 0;
+    while (total_read < HEADER_SIZE) {
+        int ret = http->Read(buffer + total_read, HEADER_SIZE - total_read);
+        if (ret < 0) {
+            ESP_LOGE(TAG, "Failed to read firmware header: %s", esp_err_to_name(ret));
+            http->Close();
+            return "";
+        }
+        if (ret == 0) {
+            break;
+        }
+        total_read += ret;
+    }
+    http->Close();
+
+    if (total_read < HEADER_SIZE) {
+        ESP_LOGE(TAG, "Firmware header too short, only %u bytes read", total_read);
+        return "";
+    }
+
+    esp_app_desc_t new_app_info;
+    memcpy(&new_app_info, buffer + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t), sizeof(esp_app_desc_t));
+    ESP_LOGI(TAG, "Remote firmware version: %s", new_app_info.version);
+    return std::string(new_app_info.version);
+}
+
+bool Ota::IsVersionNewer(const std::string& current_version, const std::string& remote_version) {
+    Ota temp;
+    return temp.IsNewVersionAvailable(current_version, remote_version);
+}
 
 std::vector<int> Ota::ParseVersion(const std::string& version) {
     std::vector<int> versionNumbers;
