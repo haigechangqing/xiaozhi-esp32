@@ -137,7 +137,7 @@ void McpServer::AddUserOnlyTools() {
             return board.GetSystemInfoJson();
         });
 
-    AddUserOnlyTool("self.get_firmware_version",
+    AddTool("self.get_firmware_version",
         "Get the current firmware version of the device.\n"
         "Use this tool when the user asks about the firmware version or whether there is a new firmware update.\n"
         "Returns a JSON object with the version field, e.g. {\"version\":\"2.5.0\"}.",
