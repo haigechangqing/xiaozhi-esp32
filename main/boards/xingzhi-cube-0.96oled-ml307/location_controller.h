@@ -11,10 +11,6 @@
 #define CONFIG_LOCATION_WEBHOOK_URL ""
 #endif
 
-#ifndef CONFIG_LOCATION_HTTP_SERVER_PORT
-#define CONFIG_LOCATION_HTTP_SERVER_PORT 8080
-#endif
-
 #include "mcp_server.h"
 #include "board.h"
 #include "audio_codec.h"
@@ -29,18 +25,12 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include <cJSON.h>
-#include <esp_http_server.h>
 
 #define TAG "LocationController"
 
 class LocationController {
 public:
-    static LocationController* GetInstance() {
-        return instance_;
-    }
-
     LocationController() {
-        instance_ = this;
         bool use_amap = (CONFIG_LOCATION_GEOCODING_PROVIDER == 1) ||
                         (std::string(CONFIG_LOCATION_AMAP_KEY).length() > 0);
         if (use_amap) {
@@ -80,77 +70,18 @@ public:
             [this](const PropertyList& properties) -> ReturnValue {
                 return HandleGetLbs();
             });
-
-        if (CONFIG_LOCATION_HTTP_SERVER_PORT > 0) {
-            StartHttpServer();
-        }
     }
 
-    ~LocationController() {
-        if (http_server_ != nullptr) {
-            httpd_stop(http_server_);
-        }
-    }
-
-    // 供外部 HTTP/MQTT 等触发定位
-    std::string TriggerLocation() {
-        auto result = HandleGetLbs();
-        if (std::holds_alternative<std::string>(result)) {
-            return std::get<std::string>(result);
-        }
-        cJSON* json = std::get<cJSON*>(result);
-        char* str = cJSON_PrintUnformatted(json);
-        std::string ret(str);
-        cJSON_free(str);
-        cJSON_Delete(json);
-        return ret;
-    }
+    ~LocationController() {}
 
 private:
-    static LocationController* instance_;
     bool lbs_configured_ = false;
-    httpd_handle_t http_server_ = nullptr;
 
     void SetDisplayMessage(const std::string& message) {
         auto* display = Board::GetInstance().GetDisplay();
         if (display) {
             display->SetChatMessage("system", message.c_str());
         }
-    }
-
-    void StartHttpServer() {
-        httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-        config.server_port = CONFIG_LOCATION_HTTP_SERVER_PORT;
-        config.max_open_sockets = 3;
-
-        httpd_uri_t location_uri = {
-            .uri = "/api/location",
-            .method = HTTP_POST,
-            .handler = HttpLocationHandler,
-            .user_ctx = nullptr
-        };
-
-        if (httpd_start(&http_server_, &config) == ESP_OK) {
-            httpd_register_uri_handler(http_server_, &location_uri);
-            ESP_LOGI(TAG, "Location HTTP server started on port %d", config.server_port);
-        } else {
-            ESP_LOGE(TAG, "Failed to start location HTTP server");
-        }
-    }
-
-    static esp_err_t HttpLocationHandler(httpd_req_t* req) {
-        auto* instance = LocationController::GetInstance();
-        if (!instance) {
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Location controller not ready");
-            return ESP_FAIL;
-        }
-
-        ESP_LOGI(TAG, "HTTP request: POST /api/location");
-        std::string result = instance->TriggerLocation();
-
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, result.c_str(), result.length());
-        return ESP_OK;
     }
 
     AtModem* GetModem() {
@@ -655,8 +586,6 @@ private:
         return parts;
     }
 };
-
-inline LocationController* LocationController::instance_ = nullptr;
 
 #undef TAG
 

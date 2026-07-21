@@ -1064,14 +1064,6 @@ menu "Location Settings"
         help
             After each successful LBS location, the result JSON will be POSTed to this URL.
             Leave empty to disable. Useful for Cloudflare Workers, IFTTT, Feishu, etc.
-
-    config LOCATION_HTTP_SERVER_PORT
-        int "Location HTTP server port (0=disable)"
-        default 8080
-        help
-            Start a lightweight HTTP server on this port to allow external triggering of LBS location.
-            POST /api/location to trigger a fresh location query.
-            Set to 0 to disable the HTTP server.
 endmenu
 
 endmenu
