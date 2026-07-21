@@ -1072,6 +1072,7 @@ idf_component_register(SRCS ${SOURCES}
                         efuse
                         bt
                         fatfs
+                        esp_http_server
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
