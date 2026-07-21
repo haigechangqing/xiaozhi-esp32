@@ -215,6 +215,13 @@ private:
                     got_status = true;
                     ESP_LOGI(TAG, "URC MLBSLOC status code: %d", status_code);
 
+                    // 收到错误状态码立即放行，不要等待 15 秒超时
+                    if (status_code != 100) {
+                        ESP_LOGW(TAG, "URC MLBSLOC error status: %d", status_code);
+                        xSemaphoreGive(semaphore);
+                        return;
+                    }
+
                     if (arguments.size() >= 3) {
                         longitude = arguments[1].type == AtArgumentValue::Type::String ?
                                     arguments[1].string_value : std::to_string(arguments[1].double_value);
@@ -233,8 +240,8 @@ private:
                         got_location = true;
                         xSemaphoreGive(semaphore);
                     } else {
-                        ESP_LOGW(TAG, "URC MLBSLOC: only status received, no coordinates");
-                        // 只收到状态码，不释放信号量，等待完整响应
+                        ESP_LOGW(TAG, "URC MLBSLOC: success status but no coordinates");
+                        // 只收到 100 状态码但没有坐标，继续等待完整 URC
                     }
                 });
 
@@ -249,8 +256,9 @@ private:
             std::string response = at_uart->GetResponse();
             ESP_LOGI(TAG, "LBS GetResponse: [%s]", response.c_str());
             if (!response.empty() && response.find("+MLBSLOC:") != std::string::npos) {
-                ParseLbsResponse(response, status_code, longitude, latitude, accuracy);
-                got_location = true;
+                if (ParseLbsResponse(response, status_code, longitude, latitude, accuracy)) {
+                    got_location = true;
+                }
             }
 
             // 等待 URC 回调，最多 15 秒
@@ -266,11 +274,8 @@ private:
             at_uart->UnregisterUrcCallback(callback_it);
             vSemaphoreDelete(semaphore);
 
-            if (got_location) {
+            if (got_location && status_code == 100) {
                 ResumeAudioOutput();
-                if (status_code != 100) {
-                    return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
-                }
                 std::string address = ReverseGeocode(latitude, longitude);
                 cJSON* json = cJSON_CreateObject();
                 cJSON_AddStringToObject(json, "type", "lbs");
@@ -287,9 +292,13 @@ private:
             }
 
             if (got_status && status_code != 100) {
-                // 已经收到明确错误状态，不需要再重试
-                ResumeAudioOutput();
-                return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
+                if (status_code == 124 && attempt < max_attempts - 1) {
+                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying...", attempt + 1);
+                } else {
+                    // 已经收到明确错误状态，不需要再重试
+                    ResumeAudioOutput();
+                    return std::string("{\"error\":\"LBS failed with status code " + std::to_string(status_code) + "\"}");
+                }
             }
 
             // 等待一会再重试
@@ -303,6 +312,7 @@ private:
         return std::string("{\"error\":\"LBS timeout: no location response from network after retries\"}");
     }
 
+    // 解析 LBS 响应，返回 true 表示成功解析到经纬度坐标
     bool ParseLbsResponse(const std::string& response, int& status_code,
                           std::string& longitude, std::string& latitude, std::string& accuracy) {
         size_t pos = response.find("+MLBSLOC:");
@@ -317,11 +327,12 @@ private:
                 longitude = parts[1];
                 latitude = parts[2];
                 accuracy = parts.size() >= 4 ? parts[3] : "500";
+                return true;
             }
         } catch (...) {
             return false;
         }
-        return true;
+        return false;
     }
 
     static std::vector<std::string> SplitByComma(const std::string& str) {

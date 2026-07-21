@@ -11,6 +11,7 @@
 #include <esp_pthread.h>
 
 #include "application.h"
+#include "ota.h"
 #include "display.h"
 #include "oled_display.h"
 #include "board.h"
@@ -44,6 +45,7 @@ void McpServer::AddCommonTools() {
 
     AddTool("self.get_device_status",
         "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
+        "Note: This tool does NOT include the firmware version. To get the firmware version, use `self.get_firmware_version`.\n"
         "Use this tool for: \n"
         "1. Answering questions about current condition (e.g. what is the current volume of the audio speaker?)\n"
         "2. As the first step to control the device (e.g. turn up / down the volume of the audio speaker, etc.)",
@@ -136,7 +138,9 @@ void McpServer::AddUserOnlyTools() {
         });
 
     AddUserOnlyTool("self.get_firmware_version",
-        "获取当前设备固件版本号",
+        "Get the current firmware version of the device.\n"
+        "Use this tool when the user asks about the firmware version or whether there is a new firmware update.\n"
+        "Returns a JSON object with the version field, e.g. {\"version\":\"2.5.0\"}.",
         PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             auto app_desc = esp_app_get_description();
@@ -157,23 +161,42 @@ void McpServer::AddUserOnlyTools() {
         });
 
     // Firmware upgrade
-    AddTool("self.upgrade_firmware", "Upgrade firmware from the latest release. This will download and install the firmware, then reboot the device. If no URL is specified, the default release URL will be used.",
+    AddTool("self.upgrade_firmware",
+        "Upgrade firmware from the latest release. This will download and install the firmware, then reboot the device. "
+        "If no URL is specified, the default release URL will be used. "
+        "Call this tool directly when the user asks to upgrade firmware; do not check device status first.",
         PropertyList({
             Property("url", kPropertyTypeString, std::string("https://raw.githubusercontent.com/haigechangqing/xiaozhi-esp32/main/update/xiaozhi.bin"))
         }),
         [this](const PropertyList& properties) -> ReturnValue {
             auto url = properties["url"].value<std::string>();
             ESP_LOGI(TAG, "User requested firmware upgrade from URL: %s", url.c_str());
-            
+
+            // 同步读取远程固件版本，快速判断是否真正需要升级
+            std::string remote_version = Ota::GetFirmwareVersionFromUrl(url);
+            if (remote_version.empty()) {
+                ESP_LOGW(TAG, "Cannot determine remote firmware version");
+                return std::string("{\"success\":false,\"message\":\"无法获取远程固件版本\"}");
+            }
+
+            auto app_desc = esp_app_get_description();
+            std::string current_version = app_desc->version;
+            if (!Ota::IsVersionNewer(current_version, remote_version)) {
+                ESP_LOGI(TAG, "Remote firmware %s is not newer than current %s",
+                         remote_version.c_str(), current_version.c_str());
+                return std::string("{\"success\":false,\"message\":\"当前已是最新版本（当前 " +
+                                   current_version + "，远程 " + remote_version + "）\"}");
+            }
+
             auto& app = Application::GetInstance();
-            app.Schedule([url, &app]() {
-                bool success = app.UpgradeFirmware(url);
+            app.Schedule([url, remote_version, &app]() {
+                bool success = app.UpgradeFirmware(url, remote_version);
                 if (!success) {
                     ESP_LOGE(TAG, "Firmware upgrade failed");
                 }
             });
-            
-            return true;
+
+            return std::string("{\"success\":true,\"message\":\"开始升级固件到版本 " + remote_version + "\"}");
         });
 
     // Display control
