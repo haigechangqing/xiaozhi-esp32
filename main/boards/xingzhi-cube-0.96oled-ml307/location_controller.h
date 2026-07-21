@@ -235,24 +235,65 @@ private:
                 cJSON* formatted = cJSON_GetObjectItem(regeocode, "formatted_address");
                 if (cJSON_IsString(formatted) && strlen(formatted->valuestring) > 0) {
                     address = formatted->valuestring;
-                } else {
-                    // 没有 formatted_address，从 addressComponent 拼装
-                    cJSON* component = cJSON_GetObjectItem(regeocode, "addressComponent");
-                    if (cJSON_IsObject(component)) {
-                        auto append = [&](const char* key) {
-                            cJSON* item = cJSON_GetObjectItem(component, key);
-                            if (cJSON_IsString(item) && strlen(item->valuestring) > 0) {
+                }
+
+                cJSON* component = cJSON_GetObjectItem(regeocode, "addressComponent");
+                if (cJSON_IsObject(component)) {
+                    auto append_string = [&](const char* key) {
+                        cJSON* item = cJSON_GetObjectItem(component, key);
+                        if (cJSON_IsString(item) && strlen(item->valuestring) > 0) {
+                            if (!address.empty()) address += " ";
+                            address += item->valuestring;
+                        }
+                    };
+
+                    auto append_object_name = [&](const char* key) {
+                        cJSON* item = cJSON_GetObjectItem(component, key);
+                        if (cJSON_IsObject(item)) {
+                            cJSON* name = cJSON_GetObjectItem(item, "name");
+                            if (cJSON_IsString(name) && strlen(name->valuestring) > 0) {
                                 if (!address.empty()) address += " ";
-                                address += item->valuestring;
+                                address += name->valuestring;
                             }
-                        };
-                        append("country");
-                        append("province");
-                        append("city");
-                        append("district");
-                        append("township");
-                        append("street");
-                        append("streetNumber");
+                        }
+                    };
+
+                    auto append_street_number = [&]() {
+                        cJSON* item = cJSON_GetObjectItem(component, "streetNumber");
+                        if (cJSON_IsObject(item)) {
+                            cJSON* street = cJSON_GetObjectItem(item, "street");
+                            cJSON* number = cJSON_GetObjectItem(item, "number");
+                            std::string street_number;
+                            if (cJSON_IsString(street) && strlen(street->valuestring) > 0) {
+                                street_number += street->valuestring;
+                            }
+                            if (cJSON_IsString(number) && strlen(number->valuestring) > 0) {
+                                street_number += number->valuestring;
+                            }
+                            if (!street_number.empty()) {
+                                if (!address.empty()) address += " ";
+                                address += street_number;
+                            }
+                        }
+                    };
+
+                    if (address.empty()) {
+                        // 没有 formatted_address，从 addressComponent 拼装完整地址
+                        append_string("country");
+                        append_string("province");
+                        append_string("city");
+                        append_string("district");
+                        append_string("township");
+                    }
+
+                    // 追加更详细的子地址信息
+                    append_object_name("neighborhood");   // 小区/社区
+                    append_object_name("building");       // 建筑物名称
+                    append_street_number();                // 街道+门牌号
+
+                    if (address.empty()) {
+                        append_string("street");
+                        append_string("streetNumber");
                     }
                 }
             }
@@ -382,10 +423,10 @@ private:
                 }
             }
 
-            // 等待 URC 回调，最多 10 秒
+            // 等待 URC 回调，最多 20 秒（ML307 模组首次 LBS 定位可能较慢）
             if (!got_location) {
-                ESP_LOGI(TAG, "Waiting for URC callback (max 10s)...");
-                if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(10000)) == pdTRUE) {
+                ESP_LOGI(TAG, "Waiting for URC callback (max 20s)...");
+                if (xSemaphoreTake(semaphore, pdMS_TO_TICKS(20000)) == pdTRUE) {
                     ESP_LOGI(TAG, "URC callback received location");
                 } else {
                     ESP_LOGW(TAG, "URC callback timeout on attempt %d", attempt + 1);
