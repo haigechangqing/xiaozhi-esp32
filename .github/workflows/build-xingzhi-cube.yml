@@ -158,7 +158,7 @@ jobs:
           {
             "firmware": {
               "version": "${{ needs.build.outputs.version }}",
-              "url": "https://raw.githubusercontent.com/${{ github.repository }}/main/update/xiaozhi.bin"
+              "url": "https://git.maopi.org/https://raw.githubusercontent.com/${{ github.repository }}/main/update/xiaozhi.bin"
             }
           }
           JSONEOF
