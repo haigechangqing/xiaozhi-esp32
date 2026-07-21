@@ -1056,7 +1056,14 @@ menu "Location Settings"
         string "Amap Web Service API key"
         default ""
         help
-            Get an Amap Web Service API key at https://console.amap.com/dev/key/app
+            Get a Amap Web Service API key at https://console.amap.com/dev/key/app
+
+    config LOCATION_WEBHOOK_URL
+        string "Location webhook URL (optional)"
+        default ""
+        help
+            After each successful LBS location, the result JSON will be POSTed to this URL.
+            Leave empty to disable. Useful for Cloudflare Workers, IFTTT, Feishu, etc.
 endmenu
 
 endmenu
