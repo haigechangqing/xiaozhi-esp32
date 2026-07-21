@@ -564,7 +564,12 @@ void Application::InitializeProtocol() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([display, message = std::string(text->valuestring)]() {
+                    std::string message = text->valuestring;
+                    // 不显示原始 MCP 工具调用标记，改为友好提示
+                    if (message.find("% self.") == 0) {
+                        message = GetToolCallDisplayMessage(message);
+                    }
+                    Schedule([display, message = std::move(message)]() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
                 }
@@ -1086,6 +1091,34 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         Reboot();
         return true;
     }
+}
+
+std::string Application::GetToolCallDisplayMessage(const std::string& tool_call) {
+    // 工具调用格式: "% self.tool_name ..." 或 "% self.tool_name(...)"
+    size_t name_start = tool_call.find("% self.");
+    if (name_start == std::string::npos) {
+        return "正在执行操作...";
+    }
+    name_start += 7; // 跳过 "% self."
+    size_t name_end = tool_call.find_first_of(" (", name_start);
+    std::string tool_name = tool_call.substr(name_start, name_end - name_start);
+
+    if (tool_name.find("location") != std::string::npos) {
+        return "正在定位...";
+    } else if (tool_name.find("upgrade_firmware") != std::string::npos) {
+        return "正在检查固件...";
+    } else if (tool_name.find("get_device_status") != std::string::npos ||
+               tool_name.find("get_system_info") != std::string::npos ||
+               tool_name.find("get_firmware_version") != std::string::npos) {
+        return "正在查询...";
+    } else if (tool_name.find("reboot") != std::string::npos) {
+        return "正在重启...";
+    } else if (tool_name.find("screen") != std::string::npos) {
+        return "正在设置屏幕...";
+    } else if (tool_name.find("audio_speaker") != std::string::npos) {
+        return "正在设置音量...";
+    }
+    return "正在执行操作...";
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {

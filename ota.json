@@ -1,6 +1,6 @@
 {
   "firmware": {
-    "version": "2.5.0",
+    "version": "2.5.1",
     "url": "https://raw.githubusercontent.com/haigechangqing/xiaozhi-esp32/main/update/xiaozhi.bin"
   }
 }

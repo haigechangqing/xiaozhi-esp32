@@ -174,6 +174,7 @@ private:
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    std::string GetToolCallDisplayMessage(const std::string& tool_call);
     
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

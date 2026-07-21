@@ -123,9 +123,17 @@ private:
     }
 
     std::string ReverseGeocode(const std::string& latitude, const std::string& longitude) {
+#if CONFIG_LOCATION_GEOCODING_PROVIDER == 1
+        return ReverseGeocodeAmap(latitude, longitude);
+#else
+        return ReverseGeocodeBigDataCloud(latitude, longitude);
+#endif
+    }
+
+    std::string ReverseGeocodeBigDataCloud(const std::string& latitude, const std::string& longitude) {
         std::string url = "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=" +
                           latitude + "&longitude=" + longitude + "&localityLanguage=zh";
-        ESP_LOGI(TAG, "Reverse geocoding: %s", url.c_str());
+        ESP_LOGI(TAG, "Reverse geocoding (BigDataCloud): %s", url.c_str());
 
         auto network = Board::GetInstance().GetNetwork();
         auto http = network->CreateHttp(0);
@@ -164,6 +172,74 @@ private:
         append_field("principalSubdivision");
         append_field("city");
         append_field("locality");
+
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "Reverse geocoding result: %s", address.c_str());
+        return address;
+    }
+
+    std::string ReverseGeocodeAmap(const std::string& latitude, const std::string& longitude) {
+        std::string url = "https://restapi.amap.com/v3/geocode/regeo?key=" +
+                          std::string(CONFIG_LOCATION_AMAP_KEY) +
+                          "&location=" + longitude + "," + latitude +
+                          "&extensions=all&coordsys=wgs84";
+        ESP_LOGI(TAG, "Reverse geocoding (Amap): %s", url.c_str());
+
+        auto network = Board::GetInstance().GetNetwork();
+        auto http = network->CreateHttp(0);
+        if (!http->Open("GET", url)) {
+            ESP_LOGE(TAG, "Failed to open Amap geocoding URL");
+            return "";
+        }
+
+        if (http->GetStatusCode() != 200) {
+            ESP_LOGE(TAG, "Amap geocoding failed, status: %d", http->GetStatusCode());
+            http->Close();
+            return "";
+        }
+
+        std::string response = http->ReadAll();
+        http->Close();
+
+        cJSON* root = cJSON_Parse(response.c_str());
+        if (!root) {
+            ESP_LOGE(TAG, "Failed to parse Amap geocoding response");
+            return "";
+        }
+
+        std::string address;
+        cJSON* status = cJSON_GetObjectItem(root, "status");
+        if (cJSON_IsString(status) && strcmp(status->valuestring, "1") == 0) {
+            cJSON* regeocode = cJSON_GetObjectItem(root, "regeocode");
+            if (cJSON_IsObject(regeocode)) {
+                cJSON* formatted = cJSON_GetObjectItem(regeocode, "formatted_address");
+                if (cJSON_IsString(formatted) && strlen(formatted->valuestring) > 0) {
+                    address = formatted->valuestring;
+                } else {
+                    // 没有 formatted_address，从 addressComponent 拼装
+                    cJSON* component = cJSON_GetObjectItem(regeocode, "addressComponent");
+                    if (cJSON_IsObject(component)) {
+                        auto append = [&](const char* key) {
+                            cJSON* item = cJSON_GetObjectItem(component, key);
+                            if (cJSON_IsString(item) && strlen(item->valuestring) > 0) {
+                                if (!address.empty()) address += " ";
+                                address += item->valuestring;
+                            }
+                        };
+                        append("country");
+                        append("province");
+                        append("city");
+                        append("district");
+                        append("township");
+                        append("street");
+                        append("streetNumber");
+                    }
+                }
+            }
+        } else {
+            cJSON* info = cJSON_GetObjectItem(root, "info");
+            ESP_LOGE(TAG, "Amap geocoding error: %s", cJSON_IsString(info) ? info->valuestring : "unknown");
+        }
 
         cJSON_Delete(root);
         ESP_LOGI(TAG, "Reverse geocoding result: %s", address.c_str());
@@ -277,6 +353,11 @@ private:
             if (got_location && status_code == 100) {
                 ResumeAudioOutput();
                 std::string address = ReverseGeocode(latitude, longitude);
+                // 同步在屏幕上显示定位结果，避免只显示工具调用名
+                auto display = Board::GetInstance().GetDisplay();
+                if (display) {
+                    display->SetChatMessage("system", address.c_str());
+                }
                 cJSON* json = cJSON_CreateObject();
                 cJSON_AddStringToObject(json, "type", "lbs");
                 cJSON_AddNumberToObject(json, "latitude", std::stod(latitude));
