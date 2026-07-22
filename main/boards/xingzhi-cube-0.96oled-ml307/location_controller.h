@@ -334,8 +334,8 @@ private:
             return std::string("{\"error\":\"Failed to configure LBS\"}");
         }
 
-        // 最多重试 3 次 LBS 定位
-        const int max_attempts = 3;
+        // 最多重试 5 次 LBS 定位
+        const int max_attempts = 5;
         for (int attempt = 0; attempt < max_attempts; attempt++) {
             ESP_LOGI(TAG, "LBS attempt %d/%d", attempt + 1, max_attempts);
             SetDisplayMessage("正在获取基站信息…（" + std::to_string(attempt + 1) + "/" + std::to_string(max_attempts) + "）");
@@ -428,8 +428,10 @@ private:
                 at_uart->UnregisterUrcCallback(callback_it);
                 vSemaphoreDelete(semaphore);
                 if (status_code == 124 && attempt < max_attempts - 1) {
-                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying...", attempt + 1);
-                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    int delay_ms = 5000 + attempt * 5000;  // 5s, 10s, 15s, 20s
+                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying after %d ms...", attempt + 1, delay_ms);
+                    SetDisplayMessage("基站定位忙，" + std::to_string(delay_ms / 1000) + "秒后重试…");
+                    vTaskDelay(pdMS_TO_TICKS(delay_ms));
                     continue;
                 } else {
                     ResumeAudioOutput();
@@ -480,8 +482,10 @@ private:
 
             if (got_status && status_code != 100) {
                 if (status_code == 124 && attempt < max_attempts - 1) {
-                    SetDisplayMessage("基站定位忙，正在重试…");
-                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying...", attempt + 1);
+                    int delay_ms = 5000 + attempt * 5000;
+                    SetDisplayMessage("基站定位忙，" + std::to_string(delay_ms / 1000) + "秒后重试…");
+                    ESP_LOGW(TAG, "LBS status 124 on attempt %d, retrying after %d ms...", attempt + 1, delay_ms);
+                    vTaskDelay(pdMS_TO_TICKS(delay_ms));
                 } else {
                     // 已经收到明确错误状态，不需要再重试
                     SetDisplayMessage("定位失败：错误码 " + std::to_string(status_code));
@@ -491,7 +495,7 @@ private:
             }
 
             // 等待一会再重试
-            if (attempt < max_attempts - 1) {
+            if (!got_location && attempt < max_attempts - 1) {
                 SetDisplayMessage("定位未成功，准备重试…");
                 ESP_LOGI(TAG, "Waiting 3s before retry...");
                 vTaskDelay(pdMS_TO_TICKS(3000));
