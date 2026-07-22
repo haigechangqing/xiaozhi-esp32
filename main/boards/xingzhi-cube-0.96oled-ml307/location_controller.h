@@ -7,10 +7,6 @@
 #define CONFIG_LOCATION_AMAP_KEY ""
 #endif
 
-#ifndef CONFIG_LOCATION_WEBHOOK_URL
-#define CONFIG_LOCATION_WEBHOOK_URL ""
-#endif
-
 #include "mcp_server.h"
 #include "board.h"
 #include "audio_codec.h"
@@ -320,46 +316,6 @@ private:
         return address;
     }
 
-    void ReportToWebhook(const cJSON* location_json) {
-        std::string url = CONFIG_LOCATION_WEBHOOK_URL;
-        if (url.empty()) {
-            return;
-        }
-
-        auto network = Board::GetInstance().GetNetwork();
-        if (!network) {
-            ESP_LOGE(TAG, "ReportToWebhook: network not available");
-            return;
-        }
-
-        auto http = network->CreateHttp(0);
-        if (!http) {
-            ESP_LOGE(TAG, "ReportToWebhook: failed to create HTTP client");
-            return;
-        }
-
-        char* json_str = cJSON_PrintUnformatted(location_json);
-        if (!json_str) {
-            ESP_LOGE(TAG, "ReportToWebhook: failed to serialize JSON");
-            return;
-        }
-        std::string payload(json_str);
-        cJSON_free(json_str);
-
-        http->SetHeader("Content-Type", "application/json");
-        http->SetContent(std::move(payload));
-
-        ESP_LOGI(TAG, "Reporting location to webhook: %s", url.c_str());
-        if (!http->Open("POST", url)) {
-            ESP_LOGE(TAG, "ReportToWebhook: failed to open URL");
-            return;
-        }
-
-        int status = http->GetStatusCode();
-        ESP_LOGI(TAG, "ReportToWebhook: status=%d", status);
-        http->Close();
-    }
-
     ReturnValue HandleGetLbs() {
         ESP_LOGI(TAG, "=== HandleGetLbs START ===");
         auto* modem = GetModem();
@@ -514,7 +470,6 @@ private:
                 cJSON_AddNumberToObject(json, "accuracy", std::stod(accuracy));
                 cJSON_AddStringToObject(json, "address", address.c_str());
                 cJSON_AddStringToObject(json, "summary", summary.c_str());
-                ReportToWebhook(json);
                 char* str = cJSON_PrintUnformatted(json);
                 std::string result(str);
                 cJSON_free(str);
