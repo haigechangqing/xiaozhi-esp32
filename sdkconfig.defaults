@@ -40,8 +40,8 @@ CONFIG_UART_ISR_IN_IRAM=y
 # Fix ESP_SSL error
 CONFIG_MBEDTLS_SSL_RENEGOTIATION=n
 
-# Use official Xiaozhi OTA endpoint (provides firmware + server config)
-CONFIG_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"
+# Use mirror proxy for OTA (4G module can't access GitHub directly)
+CONFIG_OTA_URL="https://git.maopi.org/https://raw.githubusercontent.com/haigechangqing/xiaozhi-esp32/main/ota.json"
 
 # LVGL 9.2.2
 
