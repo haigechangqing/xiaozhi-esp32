@@ -1024,6 +1024,14 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     std::string upgrade_url = url;
     std::string version_info = version;
 
+    // 4G 模组无法直连 GitHub，将 raw.githubusercontent.com 替换为中转代理
+    const std::string github_raw = "https://raw.githubusercontent.com/";
+    auto pos = upgrade_url.find(github_raw);
+    if (pos != std::string::npos) {
+        upgrade_url = "https://git.maopi.org/" + upgrade_url.substr(pos);
+        ESP_LOGI(TAG, "Rewrite firmware URL to mirror: %s", upgrade_url.c_str());
+    }
+
     // 获取远程固件版本号，若调用方未提供则通过 URL 读取固件头解析
     if (version_info.empty()) {
         version_info = Ota::GetFirmwareVersionFromUrl(upgrade_url);
