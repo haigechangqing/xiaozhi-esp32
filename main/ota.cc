@@ -25,6 +25,9 @@
 #define TAG "Ota"
 
 
+// 4G 模组无法直连 GitHub，将 raw.githubusercontent.com 替换为中转代理
+static std::string RewriteFirmwareUrl(const std::string& url);
+
 Ota::Ota() {
 #ifdef ESP_EFUSE_BLOCK_USR_DATA
     // Read Serial Number from efuse user_data
