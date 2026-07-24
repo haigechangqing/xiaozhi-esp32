@@ -270,7 +270,8 @@ void Ota::MarkCurrentVersionValid() {
 }
 
 bool Ota::Upgrade(const std::string& firmware_url, std::function<void(const std::string& stage, int progress, size_t speed)> callback) {
-    ESP_LOGI(TAG, "Upgrading firmware from %s", firmware_url.c_str());
+    auto url = RewriteFirmwareUrl(firmware_url);
+    ESP_LOGI(TAG, "Upgrading firmware from %s", url.c_str());
     esp_ota_handle_t update_handle = 0;
     auto update_partition = esp_ota_get_next_update_partition(NULL);
     if (update_partition == NULL) {
@@ -288,7 +289,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(const std:
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
-    if (!http->Open("GET", firmware_url)) {
+    if (!http->Open("GET", url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return false;
     }
@@ -408,11 +409,22 @@ bool Ota::StartUpgrade(std::function<void(const std::string& stage, int progress
     return Upgrade(firmware_url_, callback);
 }
 
+// 4G 模组无法直连 GitHub，将 raw.githubusercontent.com 替换为中转代理
+static std::string RewriteFirmwareUrl(const std::string& url) {
+    const std::string github_raw = "https://raw.githubusercontent.com/";
+    auto pos = url.find(github_raw);
+    if (pos != std::string::npos) {
+        return "https://git.maopi.org/" + url.substr(pos);
+    }
+    return url;
+}
+
 std::string Ota::GetFirmwareVersionFromUrl(const std::string& firmware_url) {
-    ESP_LOGI(TAG, "Reading firmware version from URL: %s", firmware_url.c_str());
+    auto url = RewriteFirmwareUrl(firmware_url);
+    ESP_LOGI(TAG, "Reading firmware version from URL: %s", url.c_str());
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(0);
-    if (!http->Open("GET", firmware_url)) {
+    if (!http->Open("GET", url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection to read firmware version");
         return "";
     }
